@@ -866,13 +866,15 @@ function legalMoves(board, turn, placed, opts){
 // ใช้แค่ ณ "จุดตัดสินใจจริง" เท่านั้น: ตอน AI เลือกตาสุดท้ายที่จะเดินจริง (root ของการค้นหา
 // ไม่ใช่ทุก node), ตอนตรวจตาของผู้เล่นจริง, และตอนไฮไลต์ช่องบนจอ — เรียกแค่หยิบมือ ไม่ใช่ระดับแสนครั้ง
 //
-// กระดาน 4×4 มี 24 เส้นชนะซ้อนทับกันเยอะมาก — ถ้าปล่อยให้เดินอิสระเต็มที่ ฝ่ายดำ (เดินก่อน)
-// จะสร้าง "คู่เปิดหัวท้าย" ได้เสมอ (เช่นวางสองเม็ดติดกันกลางแนวยาว 4 ช่อง โดยทั้งสองปลายว่าง)
-// ซึ่งเป็นการบังคับชนะ — ขาวบล็อกได้แค่ปลายเดียว อีกปลายชนะทันที ทดสอบแล้วว่าถ้าไม่ห้าม
-// ดำชนะทุกเกมเมื่อ AI ระดับยากชนกันเอง เฉลี่ยแค่ ~4 ตา จึงห้ามเฉพาะฝ่ายดำไม่ให้เดินตา
-// ที่เปิดช่องชนะพร้อมกันตั้งแต่ 2 ทางขึ้นไป ยกเว้นตานั้นชนะเลยทันที (ไม่ต้องห้าม เพราะเกมจบแล้ว)
-function restrictBlackForks(board, placed, turn, moves){
-  if(turn !== BLACK) return moves;
+// กระดาน 4×4 มี 24 เส้นชนะซ้อนทับกันเยอะมาก — ถ้าปล่อยให้เดินอิสระเต็มที่ ฝ่ายที่ได้ทำ "คู่เปิดหัวท้าย"
+// ก่อน (วางสองเม็ดติดกันกลางแนวยาว 4 ช่อง โดยทั้งสองปลายว่าง) จะบังคับชนะได้ — อีกฝ่ายบล็อกได้
+// แค่ปลายเดียว อีกปลายชนะทันที
+// ⚠️ เดิมห้ามเฉพาะฝ่ายดำ (ตามธรรมเนียมโกะโมกุ/หมากห้าที่ห้ามเฉพาะฝ่ายเดินก่อน) แต่เกมนี้ผู้เล่น
+// ได้เป็นฝ่ายดำเสมอตอนเริ่มเกมกับคอม (MYCOLOR = BLACK ตายตัว) ส่วนคอมได้ฝ่ายขาวที่ไม่ถูกจำกัด
+// เท่ากับกติกาบังคับใช้กับผู้เล่นฝ่ายเดียว คอมทำสิ่งที่ผู้เล่นทำไม่ได้ — ไม่แฟร์จริงตามที่มีคนทัก
+// จึงเปลี่ยนเป็นห้าม "ทั้งสองฝั่งเท่ากัน" แทน (ทดสอบแล้วว่าเกมยังจบเร็วกว่ากระดาน 3×3 เดิมมาก
+// ไม่ได้กลับไปเสมอง่ายเหมือนก่อน แค่ต้องวางกลยุทธ์สร้างฟอร์กหลายขั้นตอนแทนที่จะจบในสองเม็ด)
+function restrictForks(board, placed, turn, moves){
   const safe = moves.filter(mv => {
     apply(board, placed, turn, mv);
     const wonNow = !!checkWin(board, turn);
@@ -964,7 +966,7 @@ function myTurn(){
 // ⚠️ ส่งสำเนากระดานเข้าไปเสมอ เพราะ legalMoves เรียก apply/undo ข้างในเพื่อทดสอบแต่ละตา
 function isMoveAllowed(mv){
   const board = G.board.slice(), placed = G.placed.slice();
-  const legal = restrictBlackForks(board, placed, G.turn, legalMoves(board, G.turn, placed, OPTS));
+  const legal = restrictForks(board, placed, G.turn, legalMoves(board, G.turn, placed, OPTS));
   return legal.some(x => x.k===mv.k && (mv.k===0 ? x.c===mv.c : (x.f===mv.f && x.t===mv.t)));
 }
 
@@ -1078,7 +1080,7 @@ function undo(board, placed, turn, mv){
 function pickAiMove(){
   const board = G.board.slice(), placed = G.placed.slice(), turn = G.turn;
   // ห้ามฟอร์กใช้แค่ตอนเลือกตาจริงที่จะเดิน (root) เท่านั้น ไม่ใช้ในลูปค้นหาลึกข้างใน negamax
-  const moves = restrictBlackForks(board, placed, turn, legalMoves(board, turn, placed, OPTS));
+  const moves = restrictForks(board, placed, turn, legalMoves(board, turn, placed, OPTS));
   if(!moves.length) return null;
 
   // ระดับง่าย: เดินมั่วบ้าง แต่ยังคว้าตาชนะ/บล็อกตาแพ้ทันที
@@ -1172,9 +1174,9 @@ function updatePieces(time){
   cellBuf.fill(0);
   if(!G.over && myTurn()){
     // ใช้ตัวกรองเดียวกับที่บังคับใช้จริง เพื่อไม่ให้จุดไฮไลต์โชว์ช่องที่จริง ๆ เดินไม่ได้
-    // (เช่นตาที่จะเปิดฟอร์กของฝ่ายดำ) — ป้องกันผู้เล่นสับสนว่าทำไมคลิกแล้วไม่ติด
+    // (เช่นตาที่จะเปิดฟอร์ก) — ป้องกันผู้เล่นสับสนว่าทำไมคลิกแล้วไม่ติด
     const _b = G.board.slice(), _p = G.placed.slice();
-    const legal = restrictBlackForks(_b, _p, G.turn, legalMoves(_b, G.turn, _p, OPTS));
+    const legal = restrictForks(_b, _p, G.turn, legalMoves(_b, G.turn, _p, OPTS));
     if(G.placed[G.turn] < PIECES_PER_SIDE){
       const okC = new Set(legal.filter(m => m.k===0).map(m => m.c));
       for(const i of okC) cellBuf[i] = 2;
