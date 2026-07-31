@@ -11,7 +11,9 @@
        - กระดานไม้ = rounded box + ลายไม้ procedural
        - หมากโก๊ะ  = "เลนส์" (intersection ของทรงกลมสองลูก) ซึ่งเป็นรูปทรงจริงของหมากโก๊ะ
        - มีเงานุ่ม (soft shadow), ambient occlusion, พื้นสะท้อนเงา
-     • กติกา: ฝั่งละ 3 เม็ด วางครบแล้วเข้าสู่ "โหมดเดินหมาก" ใครเรียงสามได้ก่อนชนะ
+     • กติกา: กระดาน 4×4 ฝั่งละ 4 เม็ด วางครบแล้วเข้าสู่ "โหมดเดินหมาก" ใครเรียงสามได้ก่อนชนะ
+       (กระดาน 4×4 มีแนวชนะที่นับได้ 24 เส้น มากกว่ากระดาน 3×3 เดิมที่มีแค่ 8 เส้น
+        เกมเลยตัดสินไวกว่ามาก ไม่ต้องพึ่งดวงเหมือนกระดานเล็ก)
      • โหมด: แข่งกับคอมพิวเตอร์ / แข่งกับเพื่อนเครื่องเดียวกัน / ออนไลน์ด้วยรหัสห้อง
      • ออนไลน์ใช้ WebRTC ผ่าน PeerJS (โหลดจาก CDN ตอนกดเล่นออนไลน์เท่านั้น)
        ไม่ต้องมีเซิร์ฟเวอร์ของเราเอง — ข้อมูลวิ่งตรงระหว่างสองเครื่อง
@@ -207,7 +209,7 @@
 <div class="ov show" id="ovMenu">
   <div class="panel">
     <div class="title">หมากสามเรียง</div>
-    <div class="sub">3D · ฝั่งละ 3 เม็ด · เรียงสามชนะ</div>
+    <div class="sub">3D · กระดาน 4×4 · ฝั่งละ 4 เม็ด · เรียงสามชนะ</div>
 
     <div class="grp">
       <div class="lbl">เลือกโหมด</div>
@@ -236,11 +238,6 @@
         <div class="t">เดินได้เฉพาะช่องติดกัน
           <small>ปิด = ย้ายไปช่องว่างไหนก็ได้</small></div>
         <div class="sw" id="swAdj"></div>
-      </div>
-      <div class="opt">
-        <div class="t">ห้ามลงกลางเป็นหมากแรก
-          <small>กันฝ่ายเดินก่อนได้เปรียบเกินไป</small></div>
-        <div class="sw on" id="swCtr"></div>
       </div>
     </div>
 
@@ -310,6 +307,19 @@ const CV = document.getElementById('gl');
 const GL = CV.getContext('webgl2', {antialias:false, alpha:false, powerPreference:'high-performance'})
         || CV.getContext('webgl',  {antialias:false, alpha:false, powerPreference:'high-performance'});
 
+// ── ขนาดกระดาน ── ต้องประกาศไว้ก่อน FS_SRC เพราะ shader อ้างอิงค่าพวกนี้โดยตรง
+// (แทรกผ่าน JS template literal — เปลี่ยนที่นี่ที่เดียว กระดาน/หมาก/เชดเดอร์ตามกันหมด)
+const BOARD_N = 4;                       // กระดาน N×N
+const PIECES_PER_SIDE = 4;               // หมากต่อฝั่ง
+const CELLS = BOARD_N * BOARD_N;
+const MAX_PIECES = PIECES_PER_SIDE * 2;
+const ALL_CELLS = Array.from({length:CELLS}, (_,i) => i);
+const BOARD_HALF = BOARD_N / 2;          // ครึ่งความกว้างกระดาน (cell กว้าง 1 หน่วยเท่ากันทุกขนาดกระดาน)
+const N_F = BOARD_N.toFixed(1);                        // ค่าคงที่ float สำหรับฝัง GLSL
+const CENTER_OFF = ((BOARD_N-1)/2).toFixed(3);
+const HALF_F = BOARD_HALF.toFixed(3);
+const BOARD_EXT = (BOARD_HALF + 0.22).toFixed(3);      // ครึ่งความกว้างของ "กล่อง" กระดานจริง (เผื่อขอบ)
+
 const VS_SRC = `
 attribute vec2 aPos;
 void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }
@@ -321,9 +331,9 @@ precision highp float;
 uniform vec2  uRes;
 uniform float uTime;
 uniform vec3  uRo, uCx, uCy, uCz;   // กล้อง: ตำแหน่ง + แกน right/up/forward
-uniform vec4  uP[6];                // หมาก: xyz = ตำแหน่ง, w = 0 ว่าง / 1 ดำ / 2 ขาว
-uniform vec4  uPB[6];               // x = สเกล, y = ค่าเรืองแสง (ตอนถูกเลือก)
-uniform float uCell[9];             // เอฟเฟกต์บนช่อง: 0 ปล่อย, 1 ชี้อยู่, 2 ลงได้, 3 ถูกเลือก
+uniform vec4  uP[${MAX_PIECES}];    // หมาก: xyz = ตำแหน่ง, w = 0 ว่าง / 1 ดำ / 2 ขาว
+uniform vec4  uPB[${MAX_PIECES}];   // x = สเกล, y = ค่าเรืองแสง (ตอนถูกเลือก)
+uniform float uCell[${CELLS}];      // เอฟเฟกต์บนช่อง: 0 ปล่อย, 1 ชี้อยู่, 2 ลงได้, 3 ถูกเลือก
 uniform vec4  uWin;                 // เส้นชนะ: ax, az, bx, bz
 uniform vec2  uWinF;                // x = เปิด/ปิด, y = สีฝั่งไหน (0 ดำ 1 ขาว)
 
@@ -368,9 +378,9 @@ float fbm(vec2 p){
 // การทดสอบเงาตรงรอยต่อจะรั่ว เกิดเป็นแถบสว่างพาดใต้ขอบกระดาน
 vec2 map(vec3 p){
   vec2 res = vec2(p.y + 0.22, 0.0);                                   // พื้น
-  float db = sdRoundBox(p - vec3(0.0,0.014,0.0), vec3(1.72,0.17,1.72), 0.05);   // กระดาน
+  float db = sdRoundBox(p - vec3(0.0,0.014,0.0), vec3(${BOARD_EXT},0.17,${BOARD_EXT}), 0.05);   // กระดาน
   if(db < res.x) res = vec2(db, 1.0);
-  for(int i=0;i<6;i++){
+  for(int i=0;i<${MAX_PIECES};i++){
     float on = step(0.5, uP[i].w);
     float sc = uPB[i].x;
     float d  = sdLens(p - uP[i].xyz, 0.355*sc, 0.105*sc);
@@ -448,26 +458,32 @@ vec3 boardDecal(vec3 p, out float emis){
   vec3 wood = mix(vec3(0.212,0.128,0.060), vec3(0.288,0.180,0.089), rings);
   wood *= 0.91 + 0.09*fbm(vec2(q.x*90.0, q.y*11.0));        // เสี้ยนละเอียด
 
-  // ── เส้นตารางสามช่อง (ฝังสีเข้ม) ──
+  // ── เส้นตารางกริด (ฝังสีเข้ม) ──
+  // ทั่วไปสำหรับกระดาน N×N ใด ๆ: เลื่อนพิกัดให้เริ่มที่ 0 แล้วหาระยะถึงเส้นแบ่งจำนวนเต็ม
+  // ที่ใกล้ที่สุด (fract) — เส้นแบ่งภายในของ N ช่องอยู่ที่ตำแหน่งจำนวนเต็ม 1..N-1 พอดี
   float w = 0.019, sm = 0.007;
-  float inx = step(abs(q.x), 1.47), inz = step(abs(q.y), 1.47);
-  float lx = smoothstep(w+sm, w-sm, abs(abs(q.x)-0.5)) * inz;
-  float lz = smoothstep(w+sm, w-sm, abs(abs(q.y)-0.5)) * inx;
+  float ux = q.x + ${HALF_F}, uz = q.y + ${HALF_F};
+  float dgx = min(fract(ux), 1.0-fract(ux));
+  float dgz = min(fract(uz), 1.0-fract(uz));
+  float inx = step(abs(q.x), ${HALF_F} - 0.03), inz = step(abs(q.y), ${HALF_F} - 0.03);
+  float lx = smoothstep(w+sm, w-sm, dgx) * inz;
+  float lz = smoothstep(w+sm, w-sm, dgz) * inx;
   float line = clamp(lx + lz, 0.0, 1.0);
   wood = mix(wood, vec3(0.035,0.022,0.014), line*0.95);
 
   // ── กรอบทองบาง ๆ รอบตาราง ──
   float fr = max(abs(q.x), abs(q.y));
-  float frame = smoothstep(1.555, 1.530, fr) * smoothstep(1.480, 1.505, fr);
+  float frame = smoothstep(${(BOARD_HALF+0.055).toFixed(3)}, ${(BOARD_HALF+0.030).toFixed(3)}, fr)
+              * smoothstep(${(BOARD_HALF-0.020).toFixed(3)}, ${(BOARD_HALF+0.005).toFixed(3)}, fr);
   wood = mix(wood, gold, frame*0.9);
   emis += frame*0.30;
 
   // ── เอฟเฟกต์ต่อช่อง ──
-  for(int i=0;i<9;i++){
+  for(int i=0;i<${CELLS};i++){
     float s = uCell[i];
     if(s < 0.5) continue;
     float fi = float(i);
-    vec2 c = vec2(mod(fi,3.0) - 1.0, floor(fi/3.0) - 1.0);
+    vec2 c = vec2(mod(fi,${N_F}) - ${CENTER_OFF}, floor(fi/${N_F}) - ${CENTER_OFF});
     float r = length(q - c);
     float pulse = 0.5 + 0.5*sin(uTime*3.4 - fi*0.4);
 
@@ -620,7 +636,7 @@ function initGL(){
 
 /* ── กล้อง ─────────────────────────────────────────────────────── */
 // มุมเริ่มต้น: มองหน้ากระดานตรง ๆ (yaw 0) ก้มลงเล็กน้อย
-const CAM = { yaw:0, pitch:0.55, dist:6.3, tYaw:0, tPitch:0.55, tDist:6.3 };
+const CAM = { yaw:0, pitch:0.55, dist:8.4, tYaw:0, tPitch:0.55, tDist:8.4 };
 const camBasis = { ro:[0,0,0], cx:[1,0,0], cy:[0,1,0], cz:[0,0,-1] };
 
 function updateCam(dt){
@@ -648,7 +664,8 @@ function norm(a){ const l = Math.hypot(a[0],a[1],a[2]) || 1; return [a[0]/l, a[1
    จึงต้องยิงรังสีชน "ตัวหมาก" (ทรงกระบอก) ก่อน แล้วค่อยตกลงระนาบกระดาน */
 const BOARD_TOP = 0.234;   // 0.22 + ระยะที่ยกกระดานลอยจากพื้นในเชดเดอร์
 const STONE_R = 0.36, STONE_H = 0.21;
-const cellPos = i => [ (i%3) - 1, BOARD_TOP + 0.105, Math.floor(i/3) - 1 ];
+const CENTER_OFFSET = (BOARD_N-1)/2;   // เท่ากับ CENTER_OFF ฝั่งเชดเดอร์ (ต้องตรงกัน)
+const cellPos = i => [ (i%BOARD_N) - CENTER_OFFSET, BOARD_TOP + 0.105, Math.floor(i/BOARD_N) - CENTER_OFFSET ];
 
 function rayFrom(mx, my){
   const W = CV.clientWidth, H = CV.clientHeight;
@@ -696,7 +713,7 @@ function pickCell(mx, my){
 
   // 1) โดนหมากที่วางอยู่ก่อนไหม (เอาตัวที่ใกล้กล้องที่สุด)
   let best = Infinity, bestCell = -1;
-  for(let i=0;i<9;i++){
+  for(let i=0;i<CELLS;i++){
     if(!G.board[i]) continue;
     const c = cellPos(i);
     const t = hitStone(ro, rd, c[0], c[2]);
@@ -709,14 +726,14 @@ function pickCell(mx, my){
   const t = (BOARD_TOP - ro[1]) / rd[1];
   if(t <= 0) return -1;
   const x = ro[0] + rd[0]*t, z = ro[2] + rd[2]*t;
-  if(Math.abs(x) > 1.5 || Math.abs(z) > 1.5) return -1;
-  const col = Math.min(2, Math.max(0, Math.floor(x + 1.5)));
-  const row = Math.min(2, Math.max(0, Math.floor(z + 1.5)));
-  return row*3 + col;
+  if(Math.abs(x) > BOARD_HALF || Math.abs(z) > BOARD_HALF) return -1;
+  const col = Math.min(BOARD_N-1, Math.max(0, Math.floor(x + BOARD_HALF)));
+  const row = Math.min(BOARD_N-1, Math.max(0, Math.floor(z + BOARD_HALF)));
+  return row*BOARD_N + col;
 }
 
 /* ── ลูปวาดภาพ ─────────────────────────────────────────────────── */
-const pieceBuf = new Float32Array(24), pieceBufB = new Float32Array(24), cellBuf = new Float32Array(9);
+const pieceBuf = new Float32Array(MAX_PIECES*4), pieceBufB = new Float32Array(MAX_PIECES*4), cellBuf = new Float32Array(CELLS);
 let lastT = performance.now(), dpr = 1;
 
 function resize(){
@@ -753,29 +770,45 @@ function frame(now){
 /* =============================================================================
    ส่วนที่ 2 — ตรรกะเกม
    ============================================================================= */
-const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+// เส้นชนะ = ทุกแนว 3 ช่องติดกัน (แนวนอน/ตั้ง/ทแยงทั้งสองทิศ) บนกระดาน BOARD_N×BOARD_N
+// กระดานยิ่งใหญ่ยิ่งมีแนวซ้อนทับกันได้เยอะ (4×4 = 24 เส้น เทียบกับ 3×3 ที่มีแค่ 8 เส้น)
+// เกมเลยตัดสินไวขึ้นมาก ไม่ต้องพึ่งดวงเหมือนกระดานเล็ก
+const LINES = (() => {
+  const L = [], idx = (r,c) => r*BOARD_N + c;
+  for(let r=0;r<BOARD_N;r++) for(let c=0;c<=BOARD_N-3;c++) L.push([idx(r,c),idx(r,c+1),idx(r,c+2)]);
+  for(let c=0;c<BOARD_N;c++) for(let r=0;r<=BOARD_N-3;r++) L.push([idx(r,c),idx(r+1,c),idx(r+2,c)]);
+  for(let r=0;r<=BOARD_N-3;r++) for(let c=0;c<=BOARD_N-3;c++) L.push([idx(r,c),idx(r+1,c+1),idx(r+2,c+2)]);
+  for(let r=0;r<=BOARD_N-3;r++) for(let c=2;c<BOARD_N;c++) L.push([idx(r,c),idx(r+1,c-1),idx(r+2,c-2)]);
+  return L;
+})();
+// น้ำหนักตำแหน่งสำหรับ AI: นับว่าแต่ละช่องเป็นส่วนหนึ่งของกี่เส้นชนะ (ช่องกลางเยอะสุด)
+const CELL_LINE_COUNT = (() => {
+  const c = new Array(CELLS).fill(0);
+  for(const L of LINES) for(const i of L) c[i]++;
+  return c;
+})();
 // ช่องที่ "ติดกัน" = เดินได้แบบราชาหมากรุก (รวมทแยง)
 const ADJ = (() => {
   const a = [];
-  for(let i=0;i<9;i++){
-    const r = Math.floor(i/3), c = i%3, n = [];
+  for(let i=0;i<CELLS;i++){
+    const r = Math.floor(i/BOARD_N), c = i%BOARD_N, n = [];
     for(let dr=-1;dr<=1;dr++) for(let dc=-1;dc<=1;dc++){
       if(!dr && !dc) continue;
       const rr = r+dr, cc = c+dc;
-      if(rr>=0 && rr<3 && cc>=0 && cc<3) n.push(rr*3+cc);
+      if(rr>=0 && rr<BOARD_N && cc>=0 && cc<BOARD_N) n.push(rr*BOARD_N+cc);
     }
     a.push(n);
   }
   return a;
 })();
 
-const OPTS = { adjOnly:false, noCenterFirst:true, level:2 };
+const OPTS = { adjOnly:false, level:2 };
 let MODE = 'ai';            // 'ai' | 'local' | 'net'
 let MYCOLOR = 1;            // สีของผู้เล่นเครื่องนี้ (โหมด ai / net)
 const BLACK = 1, WHITE = 2;
 
 const G = {
-  board: new Array(9).fill(0),
+  board: new Array(CELLS).fill(0),
   turn: BLACK,
   placed: [0,0,0],          // index 1 = ดำ, 2 = ขาว
   sel: null,
@@ -791,29 +824,63 @@ let PIECES = [];            // {owner, cell, x,y,z, s, anim}
 const WINLINE = new Float32Array(4), WINFLAG = new Float32Array(2);
 
 function totalPlaced(){ return G.placed[1] + G.placed[2]; }
-function inPlacePhase(){ return G.placed[1] < 3 || G.placed[2] < 3; }
+function inPlacePhase(){ return G.placed[1] < PIECES_PER_SIDE || G.placed[2] < PIECES_PER_SIDE; }
 
 function checkWin(board, who){
   for(const L of LINES) if(board[L[0]]===who && board[L[1]]===who && board[L[2]]===who) return L;
   return null;
 }
 
+// นับว่า "who" มีวิธีชนะทันทีในตาถัดไปกี่ทาง (เดินลงช่องว่างช่องเดียวแล้วครบสาม)
+function countImmediateWins(board, who){
+  let n = 0;
+  for(let i=0;i<CELLS;i++){
+    if(board[i]) continue;
+    board[i] = who;
+    if(checkWin(board, who)) n++;
+    board[i] = 0;
+    if(n >= 2) break;
+  }
+  return n;
+}
+
 function legalMoves(board, turn, placed, opts){
   const out = [];
-  if(placed[turn] < 3){
-    for(let i=0;i<9;i++){
+  if(placed[turn] < PIECES_PER_SIDE){
+    for(let i=0;i<CELLS;i++){
       if(board[i]) continue;
-      if(opts.noCenterFirst && i===4 && placed[1]+placed[2]===0) continue;
       out.push({k:0, c:i});
     }
   } else {
-    for(let f=0; f<9; f++){
+    for(let f=0; f<CELLS; f++){
       if(board[f] !== turn) continue;
-      const tg = opts.adjOnly ? ADJ[f] : [0,1,2,3,4,5,6,7,8];
+      const tg = opts.adjOnly ? ADJ[f] : ALL_CELLS;
       for(const t of tg) if(!board[t]) out.push({k:1, f, t});
     }
   }
   return out;
+}
+
+// ⚠️ ห้ามเรียกตัวนี้ซ้อนอยู่ในลูปค้นหาลึกของ AI (negamax)! apply/undo/countImmediateWins
+// ต่อผู้สมัครทุกตัวมันแพงเกินไปถ้าเรียกซ้ำเป็นแสนครั้งตอนค้นลึก (ทำให้แท็บค้างมาแล้วจริง ๆ)
+// ใช้แค่ ณ "จุดตัดสินใจจริง" เท่านั้น: ตอน AI เลือกตาสุดท้ายที่จะเดินจริง (root ของการค้นหา
+// ไม่ใช่ทุก node), ตอนตรวจตาของผู้เล่นจริง, และตอนไฮไลต์ช่องบนจอ — เรียกแค่หยิบมือ ไม่ใช่ระดับแสนครั้ง
+//
+// กระดาน 4×4 มี 24 เส้นชนะซ้อนทับกันเยอะมาก — ถ้าปล่อยให้เดินอิสระเต็มที่ ฝ่ายดำ (เดินก่อน)
+// จะสร้าง "คู่เปิดหัวท้าย" ได้เสมอ (เช่นวางสองเม็ดติดกันกลางแนวยาว 4 ช่อง โดยทั้งสองปลายว่าง)
+// ซึ่งเป็นการบังคับชนะ — ขาวบล็อกได้แค่ปลายเดียว อีกปลายชนะทันที ทดสอบแล้วว่าถ้าไม่ห้าม
+// ดำชนะทุกเกมเมื่อ AI ระดับยากชนกันเอง เฉลี่ยแค่ ~4 ตา จึงห้ามเฉพาะฝ่ายดำไม่ให้เดินตา
+// ที่เปิดช่องชนะพร้อมกันตั้งแต่ 2 ทางขึ้นไป ยกเว้นตานั้นชนะเลยทันที (ไม่ต้องห้าม เพราะเกมจบแล้ว)
+function restrictBlackForks(board, placed, turn, moves){
+  if(turn !== BLACK) return moves;
+  const safe = moves.filter(mv => {
+    apply(board, placed, turn, mv);
+    const wonNow = !!checkWin(board, turn);
+    const forks = wonNow ? 0 : countImmediateWins(board, turn);
+    undo(board, placed, turn, mv);
+    return wonNow || forks < 2;
+  });
+  return safe.length ? safe : moves;   // กันเกมค้าง: หนีฟอร์กไม่ได้เลยจริง ๆ ก็ปล่อยเดินตามปกติ
 }
 
 /* ── ลงมือจริงบนกระดาน (พร้อมอนิเมชัน + เสียง) ────────────────── */
@@ -853,7 +920,7 @@ function doMove(mv, silent){
   const key = G.board.join('') + (3-turn);
   const n = (G.rep.get(key) || 0) + 1;
   G.rep.set(key, n);
-  if(n >= 3 || G.moves > 90){ endGame(0, null); return true; }
+  if(n >= 3 || G.moves > 200){ endGame(0, null); return true; }
 
   G.turn = 3 - turn;
   refreshUI();
@@ -893,14 +960,23 @@ function myTurn(){
   return false;
 }
 
+// ใช้ legalMoves() เป็นแหล่งความจริงเดียวทั้งฝั่ง AI และผู้เล่นจริง กันกติกาเพี้ยนไม่ตรงกัน
+// ⚠️ ส่งสำเนากระดานเข้าไปเสมอ เพราะ legalMoves เรียก apply/undo ข้างในเพื่อทดสอบแต่ละตา
+function isMoveAllowed(mv){
+  const board = G.board.slice(), placed = G.placed.slice();
+  const legal = restrictBlackForks(board, placed, G.turn, legalMoves(board, G.turn, placed, OPTS));
+  return legal.some(x => x.k===mv.k && (mv.k===0 ? x.c===mv.c : (x.f===mv.f && x.t===mv.t)));
+}
+
 function tapCell(i){
   if(i < 0 || !myTurn()) return;
   const turn = G.turn;
 
-  if(G.placed[turn] < 3){                       // ── ช่วงวางหมาก ──
+  if(G.placed[turn] < PIECES_PER_SIDE){          // ── ช่วงวางหมาก ──
     if(G.board[i]) { sfx('nope'); return; }
-    if(OPTS.noCenterFirst && i===4 && totalPlaced()===0){ toast('ตาแรกลงกลางไม่ได้ครับ'); sfx('nope'); return; }
-    commit({k:0, c:i});
+    const mv = {k:0, c:i};
+    if(!isMoveAllowed(mv)){ toast('ตานี้เปิดช่องชนะพร้อมกันสองทาง วางไม่ได้ครับ'); sfx('nope'); return; }
+    commit(mv);
     return;
   }
                                                  // ── ช่วงเดินหมาก ──
@@ -911,7 +987,9 @@ function tapCell(i){
   if(G.sel === null){ sfx('nope'); return; }
   if(G.board[i]){ sfx('nope'); return; }
   if(OPTS.adjOnly && !ADJ[G.sel].includes(i)){ toast('เดินได้เฉพาะช่องที่ติดกัน'); sfx('nope'); return; }
-  commit({k:1, f:G.sel, t:i});
+  const mv = {k:1, f:G.sel, t:i};
+  if(!isMoveAllowed(mv)){ toast('ตานี้เปิดช่องชนะพร้อมกันสองทาง เดินไม่ได้ครับ'); sfx('nope'); return; }
+  commit(mv);
 }
 
 function commit(mv){
@@ -933,18 +1011,28 @@ function evalPos(board, me){
     if(o === 0) s += m*m*4;
     if(m === 0) s -= o*o*4;
   }
-  if(board[4]===me) s += 7; else if(board[4]===opp) s -= 7;
-  for(const c of [0,2,6,8]){ if(board[c]===me) s += 2; else if(board[c]===opp) s -= 2; }
+  // น้ำหนักตำแหน่ง: ช่องที่เป็นส่วนหนึ่งของเส้นชนะเยอะ ๆ (เช่นช่องกลางกระดาน) มีค่ามากกว่า
+  // แทนที่จะฮาร์ดโค้ด "มุม/กลาง" แบบเดิมซึ่งใช้ได้แค่กระดาน 3×3
+  for(let i=0;i<CELLS;i++){
+    if(board[i]===me) s += CELL_LINE_COUNT[i]*2;
+    else if(board[i]===opp) s -= CELL_LINE_COUNT[i]*2;
+  }
   return s;
 }
 
-let aiDeadline = 0, aiAbort = false;
+let aiDeadline = 0, aiAbort = false, aiNodeCount = 0;
 
 function negamax(board, turn, placed, depth, alpha, beta, ply, path){
   // ฝ่ายตรงข้ามเพิ่งเดินจบ — ถ้าเขาเรียงสามได้ เรานี่แพ้
   if(checkWin(board, 3-turn)) return -MATE + ply;
   if(depth <= 0) return evalPos(board, turn);
-  if((ply & 3) === 0 && performance.now() > aiDeadline){ aiAbort = true; return evalPos(board, turn); }
+  // ⚠️ เช็คตามความลึก (ply) เฉย ๆ ใช้ไม่ได้กับกระดานที่กิ่งก้านเยอะ — กระดาน 4×4 ช่วงเดินหมาก
+  // มีตัวเลือกได้มากถึง ~48 ทางต่อตา (4 ตัว × ช่องว่างที่เหลือ) ก่อนจะถึงความลึกที่ครบ 4 ชั้น
+  // (จุดเช็คเดิม) อาจต้องสำรวจโหนดเป็นล้านแล้ว ทำให้ค้างก่อนจะยอมหยุดตามเวลาที่ตั้งไว้
+  // จึงนับจำนวนโหนดที่สำรวจจริงแทน เช็คทุก ๆ 512 โหนด ซึ่งกินเวลาแค่หลักมิลลิวินาที
+  // ไม่ว่ากิ่งก้านของต้นไม้จะหน้าตายังไงก็ตาม
+  aiNodeCount++;
+  if((aiNodeCount & 511) === 0 && performance.now() > aiDeadline){ aiAbort = true; return evalPos(board, turn); }
 
   const moves = legalMoves(board, turn, placed, OPTS);
   if(!moves.length) return 0;
@@ -989,7 +1077,8 @@ function undo(board, placed, turn, mv){
 
 function pickAiMove(){
   const board = G.board.slice(), placed = G.placed.slice(), turn = G.turn;
-  const moves = legalMoves(board, turn, placed, OPTS);
+  // ห้ามฟอร์กใช้แค่ตอนเลือกตาจริงที่จะเดิน (root) เท่านั้น ไม่ใช้ในลูปค้นหาลึกข้างใน negamax
+  const moves = restrictBlackForks(board, placed, turn, legalMoves(board, turn, placed, OPTS));
   if(!moves.length) return null;
 
   // ระดับง่าย: เดินมั่วบ้าง แต่ยังคว้าตาชนะ/บล็อกตาแพ้ทันที
@@ -998,10 +1087,11 @@ function pickAiMove(){
     if(Math.random() < 0.45) return moves[(Math.random()*moves.length)|0];
   }
 
-  const budget = OPTS.level === 1 ? 40 : OPTS.level === 2 ? 130 : 850;
-  const maxDepth = OPTS.level === 1 ? 2 : OPTS.level === 2 ? 5 : 14;
+  const budget = OPTS.level === 1 ? 60 : OPTS.level === 2 ? 220 : 1400;
+  const maxDepth = OPTS.level === 1 ? 2 : OPTS.level === 2 ? 5 : 16;
   aiDeadline = performance.now() + budget;
   aiAbort = false;
+  aiNodeCount = 0;
 
   let best = moves[0], bestVal = -Infinity;
   for(let d = 1; d <= maxDepth; d++){
@@ -1048,7 +1138,7 @@ function updatePieces(time){
   const now = performance.now();
   pieceBuf.fill(0); pieceBufB.fill(0);
 
-  for(let i=0;i<PIECES.length && i<6;i++){
+  for(let i=0;i<PIECES.length && i<MAX_PIECES;i++){
     const p = PIECES[i];
     let x = p.x, y = p.y, z = p.z, s = 1;
 
@@ -1081,18 +1171,19 @@ function updatePieces(time){
   // เอฟเฟกต์บนช่อง
   cellBuf.fill(0);
   if(!G.over && myTurn()){
-    if(G.placed[G.turn] < 3){
-      for(let i=0;i<9;i++){
-        if(G.board[i]) continue;
-        if(OPTS.noCenterFirst && i===4 && totalPlaced()===0) continue;
-        cellBuf[i] = 2;
-      }
+    // ใช้ตัวกรองเดียวกับที่บังคับใช้จริง เพื่อไม่ให้จุดไฮไลต์โชว์ช่องที่จริง ๆ เดินไม่ได้
+    // (เช่นตาที่จะเปิดฟอร์กของฝ่ายดำ) — ป้องกันผู้เล่นสับสนว่าทำไมคลิกแล้วไม่ติด
+    const _b = G.board.slice(), _p = G.placed.slice();
+    const legal = restrictBlackForks(_b, _p, G.turn, legalMoves(_b, G.turn, _p, OPTS));
+    if(G.placed[G.turn] < PIECES_PER_SIDE){
+      const okC = new Set(legal.filter(m => m.k===0).map(m => m.c));
+      for(const i of okC) cellBuf[i] = 2;
     } else if(G.sel !== null){
       cellBuf[G.sel] = 3;
-      const tg = OPTS.adjOnly ? ADJ[G.sel] : [0,1,2,3,4,5,6,7,8];
-      for(const t of tg) if(!G.board[t]) cellBuf[t] = 2;
+      const okT = new Set(legal.filter(m => m.k===1 && m.f===G.sel).map(m => m.t));
+      for(const t of okT) cellBuf[t] = 2;
     } else {
-      for(let i=0;i<9;i++) if(G.board[i] === G.turn) cellBuf[i] = 2;
+      for(let i=0;i<CELLS;i++) if(G.board[i] === G.turn) cellBuf[i] = 2;
     }
     if(HOVER >= 0 && cellBuf[HOVER] === 0) cellBuf[HOVER] = 1;
   } else if(G.sel !== null){
@@ -1147,7 +1238,7 @@ CV.addEventListener('pointerup', e => {
 CV.addEventListener('pointercancel', () => { drag = null; CV.classList.remove('dragging'); });
 CV.addEventListener('wheel', e => {
   e.preventDefault();
-  CAM.tDist = Math.max(3.4, Math.min(11, CAM.tDist + Math.sign(e.deltaY)*0.42));
+  CAM.tDist = Math.max(4.5, Math.min(14, CAM.tDist + Math.sign(e.deltaY)*0.5));
 }, {passive:false});
 
 /* =============================================================================
@@ -1381,7 +1472,7 @@ function refreshUI(){
 
   for(const [el, color, cls] of [[$('pipB'), BLACK, 'b'], [$('pipW'), WHITE, 'w']]){
     let h = '';
-    for(let i=0;i<3;i++) h += '<div class="pip ' + (i < 3-G.placed[color] ? 'f ' + cls : '') + '"></div>';
+    for(let i=0;i<PIECES_PER_SIDE;i++) h += '<div class="pip ' + (i < PIECES_PER_SIDE-G.placed[color] ? 'f ' + cls : '') + '"></div>';
     el.innerHTML = h;
   }
 
@@ -1394,8 +1485,8 @@ function refreshUI(){
     msg = G.winner === 0 ? 'เสมอ' : ('🏆 ' + nameOf(G.winner) + ' (' + (G.winner===BLACK?'ดำ':'ขาว') + ') ชนะ!');
   } else if(!myTurn()){
     msg = MODE === 'ai' ? 'คอมพิวเตอร์กำลังคิด…' : (NET.ready ? 'รอเพื่อนเดิน…' : 'รอการเชื่อมต่อ…');
-  } else if(G.placed[G.turn] < 3){
-    const left = 3 - G.placed[G.turn];
+  } else if(G.placed[G.turn] < PIECES_PER_SIDE){
+    const left = PIECES_PER_SIDE - G.placed[G.turn];
     msg = 'วางหมาก' + (G.turn===BLACK?'ดำ':'ขาว') + ' — เหลืออีก <b>' + left + '</b> เม็ด';
   } else if(G.sel === null){
     msg = 'หมากครบแล้ว — เลือกหมากของคุณเพื่อ<b>เดิน</b>';
@@ -1418,7 +1509,6 @@ function showResult(){
 
 function syncOptUI(){
   $('swAdj').classList.toggle('on', OPTS.adjOnly);
-  $('swCtr').classList.toggle('on', OPTS.noCenterFirst);
 }
 
 function startGame(mode){
@@ -1455,7 +1545,6 @@ $('segLv').onclick = e => {
   b.classList.add('on'); OPTS.level = +b.dataset.lv;
 };
 $('swAdj').onclick = function(){ OPTS.adjOnly = !OPTS.adjOnly; this.classList.toggle('on', OPTS.adjOnly); };
-$('swCtr').onclick = function(){ OPTS.noCenterFirst = !OPTS.noCenterFirst; this.classList.toggle('on', OPTS.noCenterFirst); };
 
 $('nCreate').onclick  = hostRoom;
 $('nJoinBtn').onclick = () => { $('netHome').style.display = 'none'; $('netJoin').style.display = 'block'; $('joinCode').focus(); };
@@ -1508,7 +1597,7 @@ $('bUndo').onclick = () => {
 };
 $('bView').onclick = () => {
   // หน้าตรงก้มเล็กน้อย (ค่าเริ่มต้น) → มองจากด้านบน → เฉียงขวา → เฉียงซ้ายมุมต่ำ
-  const views = [[0,0.55,6.3],[0,1.35,5.9],[0.62,0.80,6.2],[-0.7,0.42,6.6]];
+  const views = [[0,0.55,8.4],[0,1.35,7.9],[0.62,0.80,8.3],[-0.7,0.42,8.8]];
   $('bView')._i = (($('bView')._i || 0) + 1) % views.length;
   const v = views[$('bView')._i];
   CAM.tYaw = v[0]; CAM.tPitch = v[1]; CAM.tDist = v[2];
@@ -1524,7 +1613,7 @@ $('rMenu').onclick  = () => { hide('ovResult'); backToMenu(); };
 // สร้างหมากใหม่จากกระดานปัจจุบัน (ใช้ตอนกดย้อน)
 function rebuildPieces(){
   PIECES = [];
-  for(let i=0;i<9;i++){
+  for(let i=0;i<CELLS;i++){
     if(!G.board[i]) continue;
     const p = cellPos(i);
     PIECES.push({ owner:G.board[i], cell:i, x:p[0], y:p[1], z:p[2], s:1, anim:null });
