@@ -235,7 +235,7 @@
       <div class="opt">
         <div class="t">เดินได้เฉพาะช่องติดกัน
           <small>ปิด = ย้ายไปช่องว่างไหนก็ได้</small></div>
-        <div class="sw on" id="swAdj"></div>
+        <div class="sw" id="swAdj"></div>
       </div>
       <div class="opt">
         <div class="t">ห้ามลงกลางเป็นหมากแรก
@@ -619,7 +619,8 @@ function initGL(){
 }
 
 /* ── กล้อง ─────────────────────────────────────────────────────── */
-const CAM = { yaw:0.62, pitch:0.86, dist:6.4, tYaw:0.62, tPitch:0.86, tDist:6.4 };
+// มุมเริ่มต้น: มองหน้ากระดานตรง ๆ (yaw 0) ก้มลงเล็กน้อย
+const CAM = { yaw:0, pitch:0.55, dist:6.3, tYaw:0, tPitch:0.55, tDist:6.3 };
 const camBasis = { ro:[0,0,0], cx:[1,0,0], cy:[0,1,0], cz:[0,0,-1] };
 
 function updateCam(dt){
@@ -715,7 +716,7 @@ const ADJ = (() => {
   return a;
 })();
 
-const OPTS = { adjOnly:true, noCenterFirst:true, level:2 };
+const OPTS = { adjOnly:false, noCenterFirst:true, level:2 };
 let MODE = 'ai';            // 'ai' | 'local' | 'net'
 let MYCOLOR = 1;            // สีของผู้เล่นเครื่องนี้ (โหมด ai / net)
 const BLACK = 1, WHITE = 2;
@@ -972,7 +973,7 @@ function aiTurn(){
   if(G.over || MODE !== 'ai' || G.turn === MYCOLOR) return;
   const mv = pickAiMove();
   if(!mv) return;
-  if(mv.k === 1 && OPTS.adjOnly !== false){
+  if(mv.k === 1){
     // โชว์ให้เห็นว่าคอมกำลังจะยกหมากตัวไหน แล้วค่อยเดิน
     G.sel = mv.f; refreshUI();
     setTimeout(() => { G.sel = null; doMove(mv); }, 300);
@@ -1441,7 +1442,8 @@ $('bUndo').onclick = () => {
   sfx('tick');
 };
 $('bView').onclick = () => {
-  const views = [[0.62,0.86,6.4],[0,1.35,5.9],[Math.PI*0.5,0.55,6.6],[-0.7,0.42,7.0]];
+  // หน้าตรงก้มเล็กน้อย (ค่าเริ่มต้น) → มองจากด้านบน → เฉียงขวา → เฉียงซ้ายมุมต่ำ
+  const views = [[0,0.55,6.3],[0,1.35,5.9],[0.62,0.80,6.2],[-0.7,0.42,6.6]];
   $('bView')._i = (($('bView')._i || 0) + 1) % views.length;
   const v = views[$('bView')._i];
   CAM.tYaw = v[0]; CAM.tPitch = v[1]; CAM.tDist = v[2];
