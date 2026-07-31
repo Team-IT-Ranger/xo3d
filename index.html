@@ -835,6 +835,9 @@ function doMove(mv, silent){
     const a = cellPos(mv.f), b = cellPos(mv.t);
     if(pc){
       pc.cell = mv.t;
+      // ⚠️ ต้องย้ายพิกัดจริงด้วย ไม่ใช่แค่ cell — พอแอนิเมชันเลื่อนจบ ตัวเรนเดอร์
+      // จะกลับไปอ่าน x/y/z ของหมาก ถ้าไม่อัปเดตไว้ หมากจะเด้งกลับช่องเดิม
+      pc.x = b[0]; pc.y = b[1]; pc.z = b[2];
       pc.anim = { t0:performance.now(), dur:300, kind:'slide', a, b };
     }
     if(!silent) sfx('move');
