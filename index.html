@@ -1,0 +1,1488 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>หมากสามเรียง 3D — XO 3D</title>
+<!-- ============================================================================
+     หมากสามเรียง 3 มิติ (XO 3D / Three Men's Morris)
+     ----------------------------------------------------------------------------
+     • ฉาก 3 มิติวาดด้วย WebGL แบบ ray marching (SDF) เขียนเองล้วน ๆ ไม่พึ่ง three.js
+       - กระดานไม้ = rounded box + ลายไม้ procedural
+       - หมากโก๊ะ  = "เลนส์" (intersection ของทรงกลมสองลูก) ซึ่งเป็นรูปทรงจริงของหมากโก๊ะ
+       - มีเงานุ่ม (soft shadow), ambient occlusion, พื้นสะท้อนเงา
+     • กติกา: ฝั่งละ 3 เม็ด วางครบแล้วเข้าสู่ "โหมดเดินหมาก" ใครเรียงสามได้ก่อนชนะ
+     • โหมด: แข่งกับคอมพิวเตอร์ / แข่งกับเพื่อนเครื่องเดียวกัน / ออนไลน์ด้วยรหัสห้อง
+     • ออนไลน์ใช้ WebRTC ผ่าน PeerJS (โหลดจาก CDN ตอนกดเล่นออนไลน์เท่านั้น)
+       ไม่ต้องมีเซิร์ฟเวอร์ของเราเอง — ข้อมูลวิ่งตรงระหว่างสองเครื่อง
+     ============================================================================ -->
+<style>
+  :root{
+    --bg:#0E0B09; --gold:#C0873F; --gold-lt:#E0AC63; --cream:#F0DFC9;
+    --dim:#9E8E84; --line:rgba(255,255,255,.12);
+    --font:'Noto Sans Thai','Leelawadee UI','Segoe UI',Tahoma,sans-serif;
+  }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body{ margin:0; height:100%; overflow:hidden; background:var(--bg); font-family:var(--font); }
+  body{ color:#fff; user-select:none; }
+
+  #gl{ position:fixed; inset:0; width:100%; height:100%; display:block; touch-action:none; cursor:grab; }
+  #gl.dragging{ cursor:grabbing; }
+  #gl.pickable{ cursor:pointer; }
+
+  /* ── HUD ───────────────────────────────────────────────────────── */
+  .hud{ position:fixed; inset:0; pointer-events:none; z-index:10; }
+  .hud > *{ pointer-events:auto; }
+
+  .topbar{ position:absolute; top:0; left:0; right:0; padding:14px 16px;
+    display:flex; align-items:flex-start; gap:12px;
+    background:linear-gradient(180deg,rgba(14,11,9,.85),transparent); }
+  .btn{ background:rgba(255,255,255,.09); color:#fff; border:1px solid var(--line);
+    border-radius:10px; padding:8px 13px; font:600 12.5px/1.2 var(--font); cursor:pointer;
+    transition:.15s; white-space:nowrap; display:inline-flex; align-items:center; gap:7px; }
+  .btn:hover{ background:rgba(255,255,255,.18); border-color:rgba(255,255,255,.28); }
+  .btn:active{ transform:translateY(1px); }
+  .btn.gold{ background:var(--gold); border-color:var(--gold); color:#1B120C; }
+  .btn.gold:hover{ background:var(--gold-lt); border-color:var(--gold-lt); }
+  .btn.ghost{ background:transparent; }
+  .btn[disabled]{ opacity:.4; cursor:not-allowed; }
+  .spacer{ flex:1; }
+
+  /* แถบบอกตา + หมากคงเหลือ */
+  .turnbar{ position:absolute; top:14px; left:50%; transform:translateX(-50%);
+    background:rgba(20,14,11,.82); backdrop-filter:blur(10px); border:1px solid var(--line);
+    border-radius:14px; padding:9px 16px; display:flex; align-items:center; gap:14px;
+    box-shadow:0 10px 34px rgba(0,0,0,.5); }
+  .side{ display:flex; align-items:center; gap:8px; opacity:.42; transition:.25s; }
+  .side.on{ opacity:1; }
+  .side.on .nm{ color:var(--cream); }
+  .stone{ width:22px; height:22px; border-radius:50%; flex:none; }
+  .stone.b{ background:radial-gradient(circle at 33% 28%,#6b6b74,#16161a 58%,#000 100%);
+            box-shadow:0 2px 6px rgba(0,0,0,.6), inset 0 -2px 4px rgba(0,0,0,.6); }
+  .stone.w{ background:radial-gradient(circle at 33% 28%,#fff,#e6ddcf 55%,#b9ab97 100%);
+            box-shadow:0 2px 6px rgba(0,0,0,.5), inset 0 -2px 4px rgba(0,0,0,.18); }
+  .nm{ font:700 13px var(--font); color:#b6a89c; }
+  .pips{ display:flex; gap:3px; }
+  .pip{ width:7px; height:7px; border-radius:50%; background:rgba(255,255,255,.2); }
+  .pip.f.b{ background:#3a3a42; box-shadow:0 0 0 1px rgba(255,255,255,.22); }
+  .pip.f.w{ background:#efe6d6; }
+  .vs{ font:800 11px var(--font); color:#6b5f57; letter-spacing:1px; }
+
+  /* ข้อความใบ้ล่างจอ */
+  .hint{ position:absolute; bottom:78px; left:50%; transform:translateX(-50%);
+    background:rgba(20,14,11,.8); border:1px solid var(--line); border-radius:999px;
+    padding:8px 18px; font:600 12.5px var(--font); color:#d8ccc2; white-space:nowrap;
+    backdrop-filter:blur(8px); max-width:92vw; overflow:hidden; text-overflow:ellipsis; }
+  .hint b{ color:var(--gold-lt); }
+
+  .toolbar{ position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
+    display:flex; gap:8px; }
+
+  /* ── Overlay / เมนู ─────────────────────────────────────────────── */
+  .ov{ position:fixed; inset:0; z-index:20; display:none; align-items:center; justify-content:center;
+    background:radial-gradient(ellipse at 50% 40%,rgba(20,13,8,.72),rgba(8,6,5,.94));
+    backdrop-filter:blur(7px); padding:20px; overflow:auto; }
+  .ov.show{ display:flex; animation:fade .28s ease; }
+  @keyframes fade{ from{opacity:0} to{opacity:1} }
+  .panel{ width:min(430px,100%); background:linear-gradient(180deg,rgba(32,22,16,.96),rgba(20,14,11,.97));
+    border:1px solid rgba(255,255,255,.14); border-radius:20px; padding:26px 24px 22px;
+    box-shadow:0 26px 70px rgba(0,0,0,.7); animation:pop .3s cubic-bezier(.2,1.2,.4,1); }
+  @keyframes pop{ from{ transform:translateY(14px) scale(.96); opacity:0 } to{ transform:none; opacity:1 } }
+  .title{ font:800 27px var(--font); letter-spacing:.3px; text-align:center;
+    background:linear-gradient(180deg,#F6E3C4,#C0873F); -webkit-background-clip:text; background-clip:text;
+    -webkit-text-fill-color:transparent; }
+  .sub{ text-align:center; font:500 12px var(--font); color:var(--dim); margin:5px 0 20px; letter-spacing:.4px; }
+  .grp{ margin-bottom:16px; }
+  .lbl{ font:800 10.5px var(--font); color:#8b7d73; letter-spacing:1.3px; margin-bottom:8px; text-transform:uppercase; }
+  .row{ display:flex; gap:8px; }
+  .big{ width:100%; padding:14px 16px; border-radius:13px; border:1px solid var(--line);
+    background:rgba(255,255,255,.055); color:#fff; font:700 14.5px var(--font); cursor:pointer;
+    display:flex; align-items:center; gap:12px; transition:.16s; margin-bottom:8px; text-align:left; }
+  .big:hover{ background:rgba(255,255,255,.13); border-color:rgba(255,255,255,.3); transform:translateY(-1px); }
+  .big .ico{ font-size:20px; width:26px; text-align:center; flex:none; }
+  .big small{ display:block; font:500 11px var(--font); color:var(--dim); margin-top:2px; }
+  .big.pri{ background:linear-gradient(135deg,#C0873F,#9A6A2E); border-color:#C0873F; color:#1B120C; }
+  .big.pri small{ color:rgba(27,18,12,.72); }
+  .big.pri:hover{ background:linear-gradient(135deg,#E0AC63,#B07E38); }
+
+  .seg{ display:flex; background:rgba(0,0,0,.3); border:1px solid var(--line); border-radius:11px; padding:3px; gap:3px; }
+  .seg button{ flex:1; padding:8px 4px; border:none; border-radius:8px; background:transparent; color:#a89a90;
+    font:700 12px var(--font); cursor:pointer; transition:.15s; }
+  .seg button.on{ background:var(--gold); color:#1B120C; }
+  .seg button:not(.on):hover{ background:rgba(255,255,255,.08); color:#fff; }
+
+  .opt{ display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 0;
+    border-top:1px solid rgba(255,255,255,.07); }
+  .opt:first-child{ border-top:none; }
+  .opt .t{ font:600 12.5px var(--font); color:#cfc3b9; }
+  .opt .t small{ display:block; font:500 10.5px var(--font); color:#7d716a; margin-top:1px; }
+  .sw{ width:44px; height:25px; border-radius:999px; background:rgba(255,255,255,.14); position:relative;
+    cursor:pointer; flex:none; transition:.18s; border:1px solid var(--line); }
+  .sw::after{ content:''; position:absolute; top:2px; left:2px; width:19px; height:19px; border-radius:50%;
+    background:#cfc3b9; transition:.18s; }
+  .sw.on{ background:var(--gold); border-color:var(--gold); }
+  .sw.on::after{ left:21px; background:#1B120C; }
+
+  .code{ font:800 30px/1 ui-monospace,'SF Mono',Consolas,monospace; letter-spacing:9px; text-align:center;
+    color:var(--cream); background:rgba(0,0,0,.34); border:1px dashed rgba(192,135,63,.5); border-radius:13px;
+    padding:17px 8px 17px 17px; margin-bottom:9px; }
+  input.code{ width:100%; letter-spacing:9px; outline:none; border:1px solid var(--line);
+    border-style:solid; font-size:26px; text-transform:uppercase; }
+  input.code:focus{ border-color:var(--gold); }
+  .status{ font:600 12px var(--font); color:var(--dim); text-align:center; margin-top:10px; min-height:17px; }
+  .status.err{ color:#E77; }
+  .status.ok{ color:#8DC98D; }
+  .dots::after{ content:''; animation:dots 1.4s steps(4,end) infinite; }
+  @keyframes dots{ 0%{content:''} 25%{content:'.'} 50%{content:'..'} 75%{content:'...'} }
+
+  .rsl{ text-align:center; }
+  .rsl .em{ font-size:56px; line-height:1; margin-bottom:10px; }
+  .rsl h2{ font:800 25px var(--font); margin:0 0 6px; }
+  .rsl p{ font:500 13px var(--font); color:var(--dim); margin:0 0 20px; }
+
+  .toast{ position:fixed; bottom:26px; left:50%; transform:translateX(-50%) translateY(20px);
+    background:rgba(28,20,14,.96); border:1px solid var(--line); color:#fff; padding:11px 18px;
+    border-radius:11px; font:600 12.5px var(--font); z-index:40; opacity:0; transition:.25s; pointer-events:none;
+    box-shadow:0 12px 34px rgba(0,0,0,.6); }
+  .toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+
+  .badge{ position:absolute; top:14px; right:16px; background:rgba(20,14,11,.8); border:1px solid var(--line);
+    border-radius:999px; padding:6px 12px; font:700 11px var(--font); color:#b6a89c; display:none;
+    align-items:center; gap:7px; }
+  .badge.show{ display:flex; }
+  .led{ width:7px; height:7px; border-radius:50%; background:#8DC98D; box-shadow:0 0 8px #8DC98D; }
+  .led.off{ background:#E77; box-shadow:0 0 8px #E77; }
+
+  @media (max-width:560px){
+    .title{ font-size:23px; }
+    .turnbar{ gap:9px; padding:8px 12px; }
+    .nm{ display:none; }
+    .hint{ bottom:70px; font-size:11.5px; padding:7px 14px; }
+    .code{ font-size:24px; letter-spacing:6px; }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="gl"></canvas>
+
+<!-- ── HUD ระหว่างเล่น ────────────────────────────────────────────── -->
+<div class="hud" id="hud" style="display:none">
+  <div class="topbar">
+    <button class="btn" id="bBack">← เมนู</button>
+    <div class="spacer"></div>
+  </div>
+
+  <div class="turnbar">
+    <div class="side" id="sideB">
+      <div class="stone b"></div>
+      <div>
+        <div class="nm" id="nmB">ดำ</div>
+        <div class="pips" id="pipB"></div>
+      </div>
+    </div>
+    <div class="vs">VS</div>
+    <div class="side" id="sideW">
+      <div class="stone w"></div>
+      <div>
+        <div class="nm" id="nmW">ขาว</div>
+        <div class="pips" id="pipW"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="badge" id="netBadge"><span class="led" id="netLed"></span><span id="netTxt">ออนไลน์</span></div>
+
+  <div class="hint" id="hint">แตะช่องว่างเพื่อวางหมาก</div>
+
+  <div class="toolbar">
+    <button class="btn" id="bUndo" title="ย้อนกลับหนึ่งตา">↶ ย้อน</button>
+    <button class="btn" id="bReset">↻ เริ่มใหม่</button>
+    <button class="btn" id="bView" title="มุมกล้อง">⌖ มุมมอง</button>
+    <button class="btn" id="bSound">♪</button>
+  </div>
+</div>
+
+<!-- ── เมนูหลัก ───────────────────────────────────────────────────── -->
+<div class="ov show" id="ovMenu">
+  <div class="panel">
+    <div class="title">หมากสามเรียง</div>
+    <div class="sub">3D · ฝั่งละ 3 เม็ด · เรียงสามชนะ</div>
+
+    <div class="grp">
+      <div class="lbl">เลือกโหมด</div>
+      <button class="big pri" id="mAi">
+        <span class="ico">🤖</span>
+        <span>แข่งกับคอมพิวเตอร์<small>เลือกระดับความยากได้</small></span>
+      </button>
+      <div class="seg" id="segLv" style="margin-bottom:12px">
+        <button data-lv="1">ง่าย</button>
+        <button data-lv="2" class="on">ปานกลาง</button>
+        <button data-lv="3">ยาก</button>
+      </div>
+      <button class="big" id="mLocal">
+        <span class="ico">👥</span>
+        <span>แข่งกับเพื่อน<small>ผลัดกันเล่นบนเครื่องเดียวกัน</small></span>
+      </button>
+      <button class="big" id="mNet">
+        <span class="ico">🌐</span>
+        <span>เล่นออนไลน์<small>ส่งรหัสห้องให้เพื่อนเข้ามาแข่ง</small></span>
+      </button>
+    </div>
+
+    <div class="grp">
+      <div class="lbl">กติกา</div>
+      <div class="opt">
+        <div class="t">เดินได้เฉพาะช่องติดกัน
+          <small>ปิด = ย้ายไปช่องว่างไหนก็ได้</small></div>
+        <div class="sw on" id="swAdj"></div>
+      </div>
+      <div class="opt">
+        <div class="t">ห้ามลงกลางเป็นหมากแรก
+          <small>กันฝ่ายเดินก่อนได้เปรียบเกินไป</small></div>
+        <div class="sw on" id="swCtr"></div>
+      </div>
+    </div>
+
+    <div style="font:500 11px var(--font);color:#6b5f57;text-align:center;line-height:1.6">
+      ลากเมาส์เพื่อหมุนกระดาน · สกอร์ลเพื่อซูม
+    </div>
+  </div>
+</div>
+
+<!-- ── แผงออนไลน์ ─────────────────────────────────────────────────── -->
+<div class="ov" id="ovNet">
+  <div class="panel">
+    <div class="title">เล่นออนไลน์</div>
+    <div class="sub">เชื่อมตรงระหว่างสองเครื่อง ไม่ผ่านเซิร์ฟเวอร์เกม</div>
+
+    <div id="netHome">
+      <button class="big pri" id="nCreate">
+        <span class="ico">✨</span>
+        <span>สร้างห้อง<small>รับรหัส 5 ตัวไปส่งให้เพื่อน · คุณได้หมากดำ เดินก่อน</small></span>
+      </button>
+      <button class="big" id="nJoinBtn">
+        <span class="ico">🔑</span>
+        <span>เข้าร่วมห้อง<small>มีรหัสจากเพื่อนแล้ว</small></span>
+      </button>
+    </div>
+
+    <div id="netHost" style="display:none">
+      <div class="lbl">รหัสห้องของคุณ</div>
+      <div class="code" id="roomCode">·····</div>
+      <div class="row">
+        <button class="btn gold" id="nCopy" style="flex:1;justify-content:center">📋 คัดลอกรหัส</button>
+        <button class="btn" id="nShare" style="flex:1;justify-content:center">🔗 แชร์ลิงก์</button>
+      </div>
+      <div class="status dots" id="hostStatus">กำลังรอเพื่อนเข้าห้อง</div>
+    </div>
+
+    <div id="netJoin" style="display:none">
+      <div class="lbl">ใส่รหัสห้อง</div>
+      <input class="code" id="joinCode" maxlength="5" placeholder="ABCDE" autocomplete="off" spellcheck="false">
+      <button class="btn gold" id="nGo" style="width:100%;justify-content:center;padding:12px">เข้าห้อง</button>
+      <div class="status" id="joinStatus"></div>
+    </div>
+
+    <button class="btn ghost" id="nBack" style="width:100%;justify-content:center;margin-top:14px">← กลับ</button>
+  </div>
+</div>
+
+<!-- ── ผลการแข่ง ──────────────────────────────────────────────────── -->
+<div class="ov" id="ovResult">
+  <div class="panel rsl">
+    <div class="em" id="rslEm">🏆</div>
+    <h2 id="rslTitle">ชนะ!</h2>
+    <p id="rslSub">เรียงสามได้ก่อน</p>
+    <button class="btn gold" id="rAgain" style="width:100%;justify-content:center;padding:13px;margin-bottom:8px">เล่นอีกครั้ง</button>
+    <button class="btn ghost" id="rMenu" style="width:100%;justify-content:center;padding:11px">กลับเมนู</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+/* =============================================================================
+   ส่วนที่ 1 — เครื่องเรนเดอร์ 3 มิติ (WebGL ray marching)
+   ============================================================================= */
+const CV = document.getElementById('gl');
+const GL = CV.getContext('webgl2', {antialias:false, alpha:false, powerPreference:'high-performance'})
+        || CV.getContext('webgl',  {antialias:false, alpha:false, powerPreference:'high-performance'});
+
+const VS_SRC = `
+attribute vec2 aPos;
+void main(){ gl_Position = vec4(aPos, 0.0, 1.0); }
+`;
+
+const FS_SRC = `
+precision highp float;
+
+uniform vec2  uRes;
+uniform float uTime;
+uniform vec3  uRo, uCx, uCy, uCz;   // กล้อง: ตำแหน่ง + แกน right/up/forward
+uniform vec4  uP[6];                // หมาก: xyz = ตำแหน่ง, w = 0 ว่าง / 1 ดำ / 2 ขาว
+uniform vec4  uPB[6];               // x = สเกล, y = ค่าเรืองแสง (ตอนถูกเลือก)
+uniform float uCell[9];             // เอฟเฟกต์บนช่อง: 0 ปล่อย, 1 ชี้อยู่, 2 ลงได้, 3 ถูกเลือก
+uniform vec4  uWin;                 // เส้นชนะ: ax, az, bx, bz
+uniform vec2  uWinF;                // x = เปิด/ปิด, y = สีฝั่งไหน (0 ดำ 1 ขาว)
+
+const float PI = 3.14159265;
+
+// ── รูปทรงพื้นฐาน ────────────────────────────────────────────────
+float sdRoundBox(vec3 p, vec3 b, float r){
+  vec3 q = abs(p) - b;
+  return length(max(q,0.0)) + min(max(q.x,max(q.y,q.z)),0.0) - r;
+}
+// max แบบลบมุม — ทำให้ "สัน" ตรงเส้นศูนย์สูตรของหมากมนขึ้น
+// นอกจากเหมือนหมากโก๊ะจริงแล้ว ยังทำให้สนามเวกเตอร์ตั้งฉากต่อเนื่อง ไม่เกิดริ้วที่ขอบ
+float smax(float a, float b, float k){
+  float h = clamp(0.5 - 0.5*(a-b)/k, 0.0, 1.0);
+  return mix(a, b, h) + k*h*(1.0-h);
+}
+// หมากโก๊ะ = ส่วนร่วมของทรงกลมสองลูกที่เหลื่อมกัน (รูปเลนส์นูนสองด้าน)
+float sdLens(vec3 p, float r, float t){
+  float R = (r*r + t*t) / (2.0*t);
+  float c = R - t;
+  return smax(length(p - vec3(0.0,-c,0.0)) - R,
+              length(p - vec3(0.0, c,0.0)) - R, 0.035);
+}
+
+// ── noise สำหรับลายไม้ ──────────────────────────────────────────
+float hash21(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7))) * 43758.5453); }
+float vnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  f = f*f*(3.0-2.0*f);
+  return mix(mix(hash21(i), hash21(i+vec2(1,0)), f.x),
+             mix(hash21(i+vec2(0,1)), hash21(i+vec2(1,1)), f.x), f.y);
+}
+float fbm(vec2 p){
+  float a = 0.5, s = 0.0;
+  for(int i=0;i<4;i++){ s += a*vnoise(p); p *= 2.03; a *= 0.5; }
+  return s;
+}
+
+// ── ฉากทั้งหมด: คืน (ระยะ, รหัสวัสดุ) ───────────────────────────
+// วัสดุ 0 = พื้น, 1 = กระดาน, 2 = หมากดำ, 3 = หมากขาว
+// หมายเหตุ: ยกกระดานลอยจากพื้นนิดเดียว (0.014) เพราะถ้าก้นกระดานอยู่ระนาบเดียวกับพื้นพอดี
+// การทดสอบเงาตรงรอยต่อจะรั่ว เกิดเป็นแถบสว่างพาดใต้ขอบกระดาน
+vec2 map(vec3 p){
+  vec2 res = vec2(p.y + 0.22, 0.0);                                   // พื้น
+  float db = sdRoundBox(p - vec3(0.0,0.014,0.0), vec3(1.72,0.17,1.72), 0.05);   // กระดาน
+  if(db < res.x) res = vec2(db, 1.0);
+  for(int i=0;i<6;i++){
+    float on = step(0.5, uP[i].w);
+    float sc = uPB[i].x;
+    float d  = sdLens(p - uP[i].xyz, 0.355*sc, 0.105*sc);
+    d = mix(1e5, d, on);
+    if(d < res.x) res = vec2(d, uP[i].w < 1.5 ? 2.0 : 3.0);
+  }
+  return res;
+}
+
+// ⚠️ epsilon ต้องใหญ่พอ ไม่งั้นผลต่างของ SDF จะจมไปกับความละเอียดของ float
+// แล้วผิวหมากจะขึ้นริ้วเป็นวง ๆ เหมือนลายนิ้วมือ (ทดสอบแล้ว: 0.0035 = เป็นริ้ว, 0.02 = เรียบสนิท)
+vec3 calcNormal(vec3 p){
+  vec2 e = vec2(1.0,-1.0) * 0.018;
+  return normalize( e.xyy*map(p+e.xyy).x + e.yyx*map(p+e.yyx).x +
+                    e.yxy*map(p+e.yxy).x + e.xxx*map(p+e.xxx).x );
+}
+
+vec2 trace(vec3 ro, vec3 rd, float tmax, int maxSteps){
+  float t = 0.02; vec2 h = vec2(0.0,-1.0);
+  for(int i=0;i<120;i++){
+    if(i >= maxSteps) break;
+    vec3 p = ro + rd*t;
+    vec2 m = map(p);
+    if(m.x < 0.00035*t){ h = vec2(t, m.y); break; }
+    t += m.x * 0.96;
+    if(t > tmax) break;
+  }
+  return h;
+}
+
+// เงานุ่มแบบชดเชยระยะระหว่างสเต็ป (ของ iq) — ถ้าใช้ min(k*h/t) ตรง ๆ
+// จะเกิดริ้วเป็นวง ๆ บนผิวโค้งเพราะจุดสุ่มขยับเป็นขั้น
+float softShadow(vec3 ro, vec3 rd){
+  float res = 1.0, t = 0.09, ph = 1e10;
+  for(int i=0;i<44;i++){
+    float h = map(ro + rd*t).x;
+    float y = h*h/(2.0*ph);
+    float d = sqrt(max(h*h - y*y, 0.0));
+    res = min(res, 12.0*d/max(0.0, t-y));
+    ph = h;
+    t += clamp(h, 0.015, 0.22);
+    if(res < 0.004 || t > 7.0) break;
+  }
+  return clamp(res, 0.0, 1.0);
+}
+
+float calcAO(vec3 p, vec3 n){
+  float occ = 0.0, sca = 1.0;
+  for(int i=0;i<5;i++){
+    float h = 0.014 + 0.12*float(i)/4.0;
+    occ += (h - map(p + n*h).x) * sca;
+    sca *= 0.72;
+  }
+  return clamp(1.0 - 1.5*occ, 0.0, 1.0);
+}
+
+vec3 sky(vec3 rd){
+  float y = clamp(rd.y*0.5 + 0.5, 0.0, 1.0);
+  vec3 c = mix(vec3(0.045,0.033,0.026), vec3(0.10,0.075,0.055), y);
+  // แสงนุ่ม ๆ จากมุมบนขวาให้ฉากไม่ตายทื่อ
+  c += vec3(0.16,0.12,0.08) * pow(max(dot(rd, normalize(vec3(0.45,0.62,0.42))),0.0), 9.0);
+  return c;
+}
+
+// เอฟเฟกต์บนผิวกระดาน (เส้นตาราง + วงไฮไลต์ + เส้นชนะ)
+vec3 boardDecal(vec3 p, out float emis){
+  emis = 0.0;
+  vec2 q = p.xz;
+  vec3 gold = vec3(0.86,0.62,0.29);
+
+  // ── ลายไม้ (เสี้ยนวิ่งตามแกน z) ──
+  float g1 = fbm(vec2(q.x*1.3, q.y*2.1));
+  float rings = 0.5 + 0.5*sin(q.x*27.0 + g1*11.0);
+  rings = mix(rings, fbm(vec2(q.x*55.0, q.y*6.0)), 0.42);   // แตกลายไม่ให้เป็นริ้วซ้ำ ๆ
+  vec3 wood = mix(vec3(0.212,0.128,0.060), vec3(0.288,0.180,0.089), rings);
+  wood *= 0.91 + 0.09*fbm(vec2(q.x*90.0, q.y*11.0));        // เสี้ยนละเอียด
+
+  // ── เส้นตารางสามช่อง (ฝังสีเข้ม) ──
+  float w = 0.019, sm = 0.007;
+  float inx = step(abs(q.x), 1.47), inz = step(abs(q.y), 1.47);
+  float lx = smoothstep(w+sm, w-sm, abs(abs(q.x)-0.5)) * inz;
+  float lz = smoothstep(w+sm, w-sm, abs(abs(q.y)-0.5)) * inx;
+  float line = clamp(lx + lz, 0.0, 1.0);
+  wood = mix(wood, vec3(0.035,0.022,0.014), line*0.95);
+
+  // ── กรอบทองบาง ๆ รอบตาราง ──
+  float fr = max(abs(q.x), abs(q.y));
+  float frame = smoothstep(1.555, 1.530, fr) * smoothstep(1.480, 1.505, fr);
+  wood = mix(wood, gold, frame*0.9);
+  emis += frame*0.30;
+
+  // ── เอฟเฟกต์ต่อช่อง ──
+  for(int i=0;i<9;i++){
+    float s = uCell[i];
+    if(s < 0.5) continue;
+    float fi = float(i);
+    vec2 c = vec2(mod(fi,3.0) - 1.0, floor(fi/3.0) - 1.0);
+    float r = length(q - c);
+    float pulse = 0.5 + 0.5*sin(uTime*3.4 - fi*0.4);
+
+    if(s < 1.5){            // ชี้อยู่ → วงกลมจาง ๆ
+      float ring = smoothstep(0.40,0.375,r) * smoothstep(0.325,0.35,r);
+      wood = mix(wood, gold, ring*0.55); emis += ring*0.30;
+    } else if(s < 2.5){     // ลงได้ → จุดกลางช่องเต้นเบา ๆ
+      float dot_ = smoothstep(0.115 + 0.012*pulse, 0.075, r);
+      wood = mix(wood, gold, dot_*0.80); emis += dot_*(0.30 + 0.34*pulse);
+    } else {                // ถูกเลือกอยู่ → วงสว่างเต้น
+      float ring = smoothstep(0.44,0.415,r) * smoothstep(0.365,0.392,r);
+      wood = mix(wood, vec3(1.0,0.85,0.55), ring); emis += ring*(0.7 + 0.55*pulse);
+    }
+  }
+
+  // ── เส้นชนะ ──
+  if(uWinF.x > 0.5){
+    vec2 a = uWin.xy, b = uWin.zw;
+    vec2 pa = q - a, ba = b - a;
+    float h = clamp(dot(pa,ba)/dot(ba,ba), 0.0, 1.0);
+    float d = length(pa - ba*h);
+    float beam = smoothstep(0.075, 0.030, d);
+    float glow = smoothstep(0.30, 0.0, d) * 0.5;
+    vec3 wc = mix(vec3(1.0,0.80,0.35), vec3(0.72,0.92,1.0), uWinF.y);
+    float fl = 0.72 + 0.28*sin(uTime*6.0);
+    wood = mix(wood, wc, clamp(beam + glow*0.6, 0.0, 1.0));
+    emis += (beam*1.5 + glow) * fl;
+  }
+  return wood;
+}
+
+vec3 shade(vec3 p, vec3 n, vec3 rd, float mat){
+  vec3 ldir = normalize(vec3(0.42,0.80,0.40));
+  vec3 alb; float rough = 0.5, spec = 0.35, emis = 0.0;
+
+  if(mat < 0.5){                     // พื้น
+    float d = length(p.xz);
+    alb = mix(vec3(0.055,0.045,0.038), vec3(0.020,0.017,0.015), smoothstep(2.0,7.5,d));
+    rough = 0.32; spec = 0.5;
+  } else if(mat < 1.5){              // กระดานไม้
+    float e = 0.0;
+    vec3 top = boardDecal(p, e);
+    float isTop = smoothstep(0.55, 0.9, n.y);
+    alb = mix(vec3(0.115,0.066,0.030), top, isTop);   // ด้านข้างเข้มกว่าหน้าบน
+    emis = e * isTop;
+    rough = 0.42; spec = 0.30;
+  } else if(mat < 2.5){              // หมากดำ (หินชนวน)
+    alb = vec3(0.026,0.027,0.031); rough = 0.10; spec = 1.0;
+  } else {                           // หมากขาว (เปลือกหอย)
+    alb = vec3(0.90,0.875,0.825);    rough = 0.17; spec = 0.85;
+  }
+
+  float ao  = calcAO(p, n);
+  float sh  = softShadow(p + n*0.025, ldir);
+  float dif = max(dot(n, ldir), 0.0);
+  // ผิวขาวให้แสงลอดเข้าไปนิดหน่อย (subsurface แบบง่าย)
+  if(mat > 2.5) dif = max((dot(n,ldir) + 0.28)/1.28, 0.0);
+
+  vec3 col = alb * (vec3(1.22,1.08,0.90) * dif * (0.25 + 0.75*sh));
+  col += alb * vec3(0.20,0.20,0.26) * (0.35 + 0.65*max(n.y,0.0)) * ao;   // แสงจากท้องฟ้า
+  col += alb * vec3(0.24,0.13,0.05) * max(dot(n, normalize(vec3(-0.6,0.1,-0.5))),0.0) * 0.5*ao; // แสงสะท้อนอุ่น
+
+  // ไฮไลต์
+  vec3 h = normalize(ldir - rd);
+  float shininess = 2.0/(rough*rough+0.0015);
+  col += vec3(1.0,0.95,0.86) * spec * pow(max(dot(n,h),0.0), shininess) * sh * (0.7/(rough+0.15));
+  // fresnel ขอบหมากให้ดูมันวาว
+  float fres = pow(1.0 - max(dot(n,-rd),0.0), 5.0);
+  col += fres * spec * vec3(0.30,0.28,0.26) * ao;
+
+  col *= 0.45 + 0.55*ao;
+  col += emis * vec3(1.0,0.80,0.45);
+  return col;
+}
+
+void main(){
+  vec2 uv = (gl_FragCoord.xy - 0.5*uRes) / uRes.y;
+  vec3 rd = normalize(uCz*1.55 + uCx*uv.x + uCy*uv.y);
+  vec3 ro = uRo;
+
+  vec3 col;
+  vec2 h = trace(ro, rd, 26.0, 110);
+  if(h.y < -0.5){
+    col = sky(rd);
+  } else {
+    vec3 p = ro + rd*h.x;
+    vec3 n = calcNormal(p);
+    col = shade(p, n, rd, h.y);
+
+    // พื้นสะท้อนเงากระดาน
+    if(h.y < 0.5){
+      vec3 r = reflect(rd, n);
+      vec2 h2 = trace(p + n*0.03, r, 12.0, 46);
+      vec3 rc;
+      if(h2.y < -0.5) rc = sky(r);
+      else { vec3 p2 = p + n*0.03 + r*h2.x; rc = shade(p2, calcNormal(p2), r, h2.y); }
+      float fres = 0.18 + 0.55*pow(1.0 - max(dot(n,-rd),0.0), 4.0);
+      col = mix(col, rc, fres*0.75);
+    }
+    col = mix(col, sky(rd), smoothstep(9.0, 24.0, h.x));   // หมอกไกล ๆ
+  }
+
+  // เกรดสี: exposure → tonemap → gamma → vignette
+  col *= 1.16;
+  col = (col*(2.51*col + 0.03)) / (col*(2.43*col + 0.59) + 0.14);   // ACES แบบย่อ
+  col = pow(clamp(col,0.0,1.0), vec3(0.4545));
+  vec2 vg = gl_FragCoord.xy/uRes;
+  col *= 0.55 + 0.45*pow(16.0*vg.x*vg.y*(1.0-vg.x)*(1.0-vg.y), 0.28);
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+let PROG = null, U = {}, glOK = !!GL;
+
+function compile(type, src){
+  const s = GL.createShader(type);
+  GL.shaderSource(s, src); GL.compileShader(s);
+  if(!GL.getShaderParameter(s, GL.COMPILE_STATUS)){
+    console.error('shader error:', GL.getShaderInfoLog(s));
+    return null;
+  }
+  return s;
+}
+
+function initGL(){
+  if(!GL) return false;
+  const vs = compile(GL.VERTEX_SHADER, VS_SRC);
+  const fs = compile(GL.FRAGMENT_SHADER, FS_SRC);
+  if(!vs || !fs) return false;
+  PROG = GL.createProgram();
+  GL.attachShader(PROG, vs); GL.attachShader(PROG, fs); GL.linkProgram(PROG);
+  if(!GL.getProgramParameter(PROG, GL.LINK_STATUS)){
+    console.error('link error:', GL.getProgramInfoLog(PROG)); return false;
+  }
+  GL.useProgram(PROG);
+
+  const buf = GL.createBuffer();
+  GL.bindBuffer(GL.ARRAY_BUFFER, buf);
+  GL.bufferData(GL.ARRAY_BUFFER, new Float32Array([-1,-1, 3,-1, -1,3]), GL.STATIC_DRAW);
+  const loc = GL.getAttribLocation(PROG, 'aPos');
+  GL.enableVertexAttribArray(loc);
+  GL.vertexAttribPointer(loc, 2, GL.FLOAT, false, 0, 0);
+
+  ['uRes','uTime','uRo','uCx','uCy','uCz','uWin','uWinF'].forEach(n => U[n] = GL.getUniformLocation(PROG, n));
+  U.uP    = GL.getUniformLocation(PROG, 'uP[0]');
+  U.uPB   = GL.getUniformLocation(PROG, 'uPB[0]');
+  U.uCell = GL.getUniformLocation(PROG, 'uCell[0]');
+  return true;
+}
+
+/* ── กล้อง ─────────────────────────────────────────────────────── */
+const CAM = { yaw:0.62, pitch:0.86, dist:6.4, tYaw:0.62, tPitch:0.86, tDist:6.4 };
+const camBasis = { ro:[0,0,0], cx:[1,0,0], cy:[0,1,0], cz:[0,0,-1] };
+
+function updateCam(dt){
+  // ตามค่าเป้าหมายแบบนุ่มนวล
+  const k = 1 - Math.pow(0.0016, dt);
+  CAM.yaw   += (CAM.tYaw   - CAM.yaw)   * k;
+  CAM.pitch += (CAM.tPitch - CAM.pitch) * k;
+  CAM.dist  += (CAM.tDist  - CAM.dist)  * k;
+
+  const cp = Math.cos(CAM.pitch), sp = Math.sin(CAM.pitch);
+  const ro = [CAM.dist*cp*Math.sin(CAM.yaw), CAM.dist*sp, CAM.dist*cp*Math.cos(CAM.yaw)];
+  const f = norm([-ro[0], -ro[1], -ro[2]]);
+  let cx = norm(cross(f, [0,1,0]));
+  const cy = cross(cx, f);
+  camBasis.ro = ro; camBasis.cx = cx; camBasis.cy = cy; camBasis.cz = f;
+}
+function cross(a,b){ return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]]; }
+function norm(a){ const l = Math.hypot(a[0],a[1],a[2]) || 1; return [a[0]/l, a[1]/l, a[2]/l]; }
+
+/* ── หา "ช่อง" ที่เมาส์ชี้อยู่ (ยิงรังสีตัดระนาบหน้ากระดาน) ────── */
+const BOARD_TOP = 0.234;   // 0.22 + ระยะที่ยกกระดานลอยจากพื้นในเชดเดอร์
+function pickCell(mx, my){
+  const W = CV.clientWidth, H = CV.clientHeight;
+  const ux = (mx - 0.5*W)/H, uy = -(my - 0.5*H)/H;
+  const c = camBasis;
+  const rd = norm([
+    c.cz[0]*1.55 + c.cx[0]*ux + c.cy[0]*uy,
+    c.cz[1]*1.55 + c.cx[1]*ux + c.cy[1]*uy,
+    c.cz[2]*1.55 + c.cx[2]*ux + c.cy[2]*uy
+  ]);
+  if(Math.abs(rd[1]) < 1e-5) return -1;
+  const t = (BOARD_TOP - c.ro[1]) / rd[1];
+  if(t <= 0) return -1;
+  const x = c.ro[0] + rd[0]*t, z = c.ro[2] + rd[2]*t;
+  if(Math.abs(x) > 1.5 || Math.abs(z) > 1.5) return -1;
+  const col = Math.min(2, Math.max(0, Math.floor(x + 1.5)));
+  const row = Math.min(2, Math.max(0, Math.floor(z + 1.5)));
+  return row*3 + col;
+}
+const cellPos = i => [ (i%3) - 1, BOARD_TOP + 0.105, Math.floor(i/3) - 1 ];
+
+/* ── ลูปวาดภาพ ─────────────────────────────────────────────────── */
+const pieceBuf = new Float32Array(24), pieceBufB = new Float32Array(24), cellBuf = new Float32Array(9);
+let lastT = performance.now(), dpr = 1;
+
+function resize(){
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const q = window.innerWidth * window.innerHeight > 2600*1400 ? 0.78 : 1.0;   // ลดความละเอียดบนจอใหญ่มาก
+  const w = Math.round(CV.clientWidth * dpr * q), h = Math.round(CV.clientHeight * dpr * q);
+  if(CV.width !== w || CV.height !== h){ CV.width = w; CV.height = h; }
+}
+
+function frame(now){
+  requestAnimationFrame(frame);
+  if(!PROG) return;
+  const dt = Math.min((now - lastT)/1000, 0.05); lastT = now;
+
+  resize();
+  updateCam(dt);
+  updatePieces(now/1000);
+
+  GL.viewport(0, 0, CV.width, CV.height);
+  GL.uniform2f(U.uRes, CV.width, CV.height);
+  GL.uniform1f(U.uTime, now/1000);
+  GL.uniform3fv(U.uRo, camBasis.ro);
+  GL.uniform3fv(U.uCx, camBasis.cx);
+  GL.uniform3fv(U.uCy, camBasis.cy);
+  GL.uniform3fv(U.uCz, camBasis.cz);
+  GL.uniform4fv(U.uP, pieceBuf);
+  GL.uniform4fv(U.uPB, pieceBufB);
+  GL.uniform1fv(U.uCell, cellBuf);
+  GL.uniform4fv(U.uWin, WINLINE);
+  GL.uniform2fv(U.uWinF, WINFLAG);
+  GL.drawArrays(GL.TRIANGLES, 0, 3);
+}
+
+/* =============================================================================
+   ส่วนที่ 2 — ตรรกะเกม
+   ============================================================================= */
+const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+// ช่องที่ "ติดกัน" = เดินได้แบบราชาหมากรุก (รวมทแยง)
+const ADJ = (() => {
+  const a = [];
+  for(let i=0;i<9;i++){
+    const r = Math.floor(i/3), c = i%3, n = [];
+    for(let dr=-1;dr<=1;dr++) for(let dc=-1;dc<=1;dc++){
+      if(!dr && !dc) continue;
+      const rr = r+dr, cc = c+dc;
+      if(rr>=0 && rr<3 && cc>=0 && cc<3) n.push(rr*3+cc);
+    }
+    a.push(n);
+  }
+  return a;
+})();
+
+const OPTS = { adjOnly:true, noCenterFirst:true, level:2 };
+let MODE = 'ai';            // 'ai' | 'local' | 'net'
+let MYCOLOR = 1;            // สีของผู้เล่นเครื่องนี้ (โหมด ai / net)
+const BLACK = 1, WHITE = 2;
+
+const G = {
+  board: new Array(9).fill(0),
+  turn: BLACK,
+  placed: [0,0,0],          // index 1 = ดำ, 2 = ขาว
+  sel: null,
+  over: false,
+  winner: 0,
+  winLine: null,
+  moves: 0,
+  rep: new Map(),
+  history: []
+};
+
+let PIECES = [];            // {owner, cell, x,y,z, s, anim}
+const WINLINE = new Float32Array(4), WINFLAG = new Float32Array(2);
+
+function totalPlaced(){ return G.placed[1] + G.placed[2]; }
+function inPlacePhase(){ return G.placed[1] < 3 || G.placed[2] < 3; }
+
+function checkWin(board, who){
+  for(const L of LINES) if(board[L[0]]===who && board[L[1]]===who && board[L[2]]===who) return L;
+  return null;
+}
+
+function legalMoves(board, turn, placed, opts){
+  const out = [];
+  if(placed[turn] < 3){
+    for(let i=0;i<9;i++){
+      if(board[i]) continue;
+      if(opts.noCenterFirst && i===4 && placed[1]+placed[2]===0) continue;
+      out.push({k:0, c:i});
+    }
+  } else {
+    for(let f=0; f<9; f++){
+      if(board[f] !== turn) continue;
+      const tg = opts.adjOnly ? ADJ[f] : [0,1,2,3,4,5,6,7,8];
+      for(const t of tg) if(!board[t]) out.push({k:1, f, t});
+    }
+  }
+  return out;
+}
+
+/* ── ลงมือจริงบนกระดาน (พร้อมอนิเมชัน + เสียง) ────────────────── */
+function doMove(mv, silent){
+  if(G.over) return false;
+  const turn = G.turn;
+  G.history.push({ board:G.board.slice(), turn, placed:G.placed.slice(), moves:G.moves });
+
+  if(mv.k === 0){
+    G.board[mv.c] = turn;
+    G.placed[turn]++;
+    const p = cellPos(mv.c);
+    PIECES.push({ owner:turn, cell:mv.c, x:p[0], y:p[1], z:p[2], s:1,
+                  anim:{ t0:performance.now(), dur:340, kind:'drop' } });
+    if(!silent) sfx('place');
+  } else {
+    G.board[mv.f] = 0; G.board[mv.t] = turn;
+    const pc = PIECES.find(p => p.cell === mv.f && p.owner === turn);
+    const a = cellPos(mv.f), b = cellPos(mv.t);
+    if(pc){
+      pc.cell = mv.t;
+      pc.anim = { t0:performance.now(), dur:300, kind:'slide', a, b };
+    }
+    if(!silent) sfx('move');
+  }
+
+  G.sel = null;
+  G.moves++;
+
+  const L = checkWin(G.board, turn);
+  if(L){ endGame(turn, L); return true; }
+
+  // เสมอเมื่อเดินวนซ้ำสามครั้ง หรือยืดเยื้อเกินไป
+  const key = G.board.join('') + (3-turn);
+  const n = (G.rep.get(key) || 0) + 1;
+  G.rep.set(key, n);
+  if(n >= 3 || G.moves > 90){ endGame(0, null); return true; }
+
+  G.turn = 3 - turn;
+  refreshUI();
+  if(MODE === 'ai' && G.turn !== MYCOLOR && !G.over) setTimeout(aiTurn, 380);
+  return true;
+}
+
+function endGame(winner, L){
+  G.over = true; G.winner = winner; G.winLine = L;
+  if(L){
+    const a = cellPos(L[0]), b = cellPos(L[2]);
+    WINLINE[0]=a[0]; WINLINE[1]=a[2]; WINLINE[2]=b[0]; WINLINE[3]=b[2];
+    WINFLAG[0]=1; WINFLAG[1]= winner===WHITE ? 1 : 0;
+  }
+  refreshUI();
+  sfx(winner ? 'win' : 'draw');
+  setTimeout(showResult, 900);
+}
+
+function resetGame(){
+  G.board.fill(0); G.turn = BLACK; G.placed = [0,0,0]; G.sel = null;
+  G.over = false; G.winner = 0; G.winLine = null; G.moves = 0;
+  G.rep.clear(); G.history.length = 0;
+  PIECES = [];
+  WINFLAG[0] = 0;
+  hide('ovResult');
+  refreshUI();
+  if(MODE === 'ai' && G.turn !== MYCOLOR) setTimeout(aiTurn, 520);
+}
+
+/* ── รับอินพุตจากผู้เล่น ────────────────────────────────────────── */
+function myTurn(){
+  if(G.over) return false;
+  if(MODE === 'local') return true;
+  if(MODE === 'ai')  return G.turn === MYCOLOR;
+  if(MODE === 'net') return NET.ready && G.turn === MYCOLOR;
+  return false;
+}
+
+function tapCell(i){
+  if(i < 0 || !myTurn()) return;
+  const turn = G.turn;
+
+  if(G.placed[turn] < 3){                       // ── ช่วงวางหมาก ──
+    if(G.board[i]) { sfx('nope'); return; }
+    if(OPTS.noCenterFirst && i===4 && totalPlaced()===0){ toast('ตาแรกลงกลางไม่ได้ครับ'); sfx('nope'); return; }
+    commit({k:0, c:i});
+    return;
+  }
+                                                 // ── ช่วงเดินหมาก ──
+  if(G.board[i] === turn){                       // เลือก / เปลี่ยนตัวที่จะเดิน
+    G.sel = (G.sel === i) ? null : i;
+    sfx('tick'); refreshUI(); return;
+  }
+  if(G.sel === null){ sfx('nope'); return; }
+  if(G.board[i]){ sfx('nope'); return; }
+  if(OPTS.adjOnly && !ADJ[G.sel].includes(i)){ toast('เดินได้เฉพาะช่องที่ติดกัน'); sfx('nope'); return; }
+  commit({k:1, f:G.sel, t:i});
+}
+
+function commit(mv){
+  doMove(mv);
+  if(MODE === 'net' && NET.conn && NET.conn.open) NET.conn.send({t:'act', mv});
+}
+
+/* =============================================================================
+   ส่วนที่ 3 — คอมพิวเตอร์ (negamax + alpha-beta + iterative deepening)
+   ============================================================================= */
+const MATE = 100000;
+
+function evalPos(board, me){
+  const opp = 3 - me;
+  let s = 0;
+  for(const L of LINES){
+    let m = 0, o = 0;
+    for(const i of L){ if(board[i]===me) m++; else if(board[i]===opp) o++; }
+    if(o === 0) s += m*m*4;
+    if(m === 0) s -= o*o*4;
+  }
+  if(board[4]===me) s += 7; else if(board[4]===opp) s -= 7;
+  for(const c of [0,2,6,8]){ if(board[c]===me) s += 2; else if(board[c]===opp) s -= 2; }
+  return s;
+}
+
+let aiDeadline = 0, aiAbort = false;
+
+function negamax(board, turn, placed, depth, alpha, beta, ply, path){
+  // ฝ่ายตรงข้ามเพิ่งเดินจบ — ถ้าเขาเรียงสามได้ เรานี่แพ้
+  if(checkWin(board, 3-turn)) return -MATE + ply;
+  if(depth <= 0) return evalPos(board, turn);
+  if((ply & 3) === 0 && performance.now() > aiDeadline){ aiAbort = true; return evalPos(board, turn); }
+
+  const moves = legalMoves(board, turn, placed, OPTS);
+  if(!moves.length) return 0;
+
+  // จัดลำดับ: ตาที่ชนะทันทีมาก่อน
+  for(const mv of moves){
+    apply(board, placed, turn, mv);
+    mv._w = checkWin(board, turn) ? 1 : 0;
+    mv._e = mv._w ? 0 : evalPos(board, turn);
+    undo(board, placed, turn, mv);
+  }
+  moves.sort((a,b) => (b._w - a._w) || (b._e - a._e));
+
+  let best = -Infinity;
+  for(const mv of moves){
+    apply(board, placed, turn, mv);
+    let v;
+    const key = board.join('') + (3-turn);
+    if(path.has(key)) v = 0;                 // เดินวนกลับที่เดิม = เสมอ
+    else {
+      path.add(key);
+      v = -negamax(board, 3-turn, placed, depth-1, -beta, -alpha, ply+1, path);
+      path.delete(key);
+    }
+    undo(board, placed, turn, mv);
+    if(v > best) best = v;
+    if(best > alpha) alpha = best;
+    if(alpha >= beta) break;
+    if(aiAbort) break;
+  }
+  return best;
+}
+
+function apply(board, placed, turn, mv){
+  if(mv.k === 0){ board[mv.c] = turn; placed[turn]++; }
+  else { board[mv.f] = 0; board[mv.t] = turn; }
+}
+function undo(board, placed, turn, mv){
+  if(mv.k === 0){ board[mv.c] = 0; placed[turn]--; }
+  else { board[mv.t] = 0; board[mv.f] = turn; }
+}
+
+function pickAiMove(){
+  const board = G.board.slice(), placed = G.placed.slice(), turn = G.turn;
+  const moves = legalMoves(board, turn, placed, OPTS);
+  if(!moves.length) return null;
+
+  // ระดับง่าย: เดินมั่วบ้าง แต่ยังคว้าตาชนะ/บล็อกตาแพ้ทันที
+  if(OPTS.level === 1){
+    for(const mv of moves){ apply(board,placed,turn,mv); const w = checkWin(board,turn); undo(board,placed,turn,mv); if(w) return mv; }
+    if(Math.random() < 0.45) return moves[(Math.random()*moves.length)|0];
+  }
+
+  const budget = OPTS.level === 1 ? 40 : OPTS.level === 2 ? 130 : 850;
+  const maxDepth = OPTS.level === 1 ? 2 : OPTS.level === 2 ? 5 : 14;
+  aiDeadline = performance.now() + budget;
+  aiAbort = false;
+
+  let best = moves[0], bestVal = -Infinity;
+  for(let d = 1; d <= maxDepth; d++){
+    let localBest = null, localVal = -Infinity, alpha = -Infinity;
+    const path = new Set([board.join('') + turn]);
+    for(const mv of moves){
+      apply(board, placed, turn, mv);
+      const key = board.join('') + (3-turn);
+      let v;
+      if(path.has(key)) v = 0;
+      else { path.add(key); v = -negamax(board, 3-turn, placed, d-1, -Infinity, -alpha, 1, path); path.delete(key); }
+      undo(board, placed, turn, mv);
+      if(v > localVal){ localVal = v; localBest = mv; }
+      if(v > alpha) alpha = v;
+      if(aiAbort) break;
+    }
+    if(localBest && !aiAbort){ best = localBest; bestVal = localVal; }
+    if(aiAbort || bestVal > MATE/2) break;
+    if(performance.now() > aiDeadline) break;
+  }
+  return best;
+}
+
+function aiTurn(){
+  if(G.over || MODE !== 'ai' || G.turn === MYCOLOR) return;
+  const mv = pickAiMove();
+  if(!mv) return;
+  if(mv.k === 1 && OPTS.adjOnly !== false){
+    // โชว์ให้เห็นว่าคอมกำลังจะยกหมากตัวไหน แล้วค่อยเดิน
+    G.sel = mv.f; refreshUI();
+    setTimeout(() => { G.sel = null; doMove(mv); }, 300);
+  } else {
+    doMove(mv);
+  }
+}
+
+/* =============================================================================
+   ส่วนที่ 4 — อนิเมชันหมาก + สถานะเอฟเฟกต์บนกระดาน
+   ============================================================================= */
+const ease = t => 1 - Math.pow(1-t, 3);
+const easeBack = t => { const c = 1.70158; return 1 + (c+1)*Math.pow(t-1,3) + c*Math.pow(t-1,2); };
+
+function updatePieces(time){
+  const now = performance.now();
+  pieceBuf.fill(0); pieceBufB.fill(0);
+
+  for(let i=0;i<PIECES.length && i<6;i++){
+    const p = PIECES[i];
+    let x = p.x, y = p.y, z = p.z, s = 1;
+
+    if(p.anim){
+      const t = Math.min((now - p.anim.t0)/p.anim.dur, 1);
+      if(p.anim.kind === 'drop'){
+        const e = ease(t);
+        y = p.y + (1.9 * (1-e));
+        s = 0.4 + 0.6*easeBack(Math.min(t*1.25,1));
+        if(t > 0.82) y = p.y + Math.sin((t-0.82)/0.18*Math.PI) * -0.012;   // เด้งเล็กน้อยตอนกระทบ
+      } else {
+        const e = ease(t);
+        const a = p.anim.a, b = p.anim.b;
+        x = a[0] + (b[0]-a[0])*e;
+        z = a[2] + (b[2]-a[2])*e;
+        y = p.y + Math.sin(e*Math.PI) * 0.42;
+        s = 1 + Math.sin(e*Math.PI) * 0.06;
+      }
+      if(t >= 1) p.anim = null;
+    }
+
+    // ตัวที่ถูกเลือกอยู่ให้ลอยเบา ๆ
+    const selected = (G.sel !== null && p.cell === G.sel && p.owner === G.turn && !p.anim);
+    if(selected) y += 0.10 + Math.sin(time*3.6)*0.035;
+
+    pieceBuf[i*4+0] = x; pieceBuf[i*4+1] = y; pieceBuf[i*4+2] = z; pieceBuf[i*4+3] = p.owner;
+    pieceBufB[i*4+0] = s; pieceBufB[i*4+1] = selected ? 1 : 0;
+  }
+
+  // เอฟเฟกต์บนช่อง
+  cellBuf.fill(0);
+  if(!G.over && myTurn()){
+    if(G.placed[G.turn] < 3){
+      for(let i=0;i<9;i++){
+        if(G.board[i]) continue;
+        if(OPTS.noCenterFirst && i===4 && totalPlaced()===0) continue;
+        cellBuf[i] = 2;
+      }
+    } else if(G.sel !== null){
+      cellBuf[G.sel] = 3;
+      const tg = OPTS.adjOnly ? ADJ[G.sel] : [0,1,2,3,4,5,6,7,8];
+      for(const t of tg) if(!G.board[t]) cellBuf[t] = 2;
+    } else {
+      for(let i=0;i<9;i++) if(G.board[i] === G.turn) cellBuf[i] = 2;
+    }
+    if(HOVER >= 0 && cellBuf[HOVER] === 0) cellBuf[HOVER] = 1;
+  } else if(G.sel !== null){
+    cellBuf[G.sel] = 3;
+  }
+}
+
+/* =============================================================================
+   ส่วนที่ 5 — อินพุต (หมุนกล้อง / แตะช่อง)
+   ============================================================================= */
+let HOVER = -1;
+let drag = null;
+
+CV.addEventListener('pointerdown', e => {
+  CV.setPointerCapture(e.pointerId);
+  drag = { x:e.clientX, y:e.clientY, sx:e.clientX, sy:e.clientY, t:performance.now(), moved:0 };
+});
+CV.addEventListener('pointermove', e => {
+  if(drag){
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    drag.moved += Math.abs(dx) + Math.abs(dy);
+    if(drag.moved > 5){
+      CV.classList.add('dragging');
+      CAM.tYaw   -= dx * 0.0072;
+      CAM.tPitch = Math.max(0.18, Math.min(1.42, CAM.tPitch + dy*0.0060));
+    }
+    drag.x = e.clientX; drag.y = e.clientY;
+  } else {
+    const r = CV.getBoundingClientRect();
+    HOVER = pickCell(e.clientX - r.left, e.clientY - r.top);
+    CV.classList.toggle('pickable', HOVER >= 0 && myTurn());
+  }
+});
+CV.addEventListener('pointerup', e => {
+  const wasDrag = drag && (drag.moved > 6 || performance.now() - drag.t > 550);
+  CV.classList.remove('dragging');
+  if(drag && !wasDrag){
+    const r = CV.getBoundingClientRect();
+    tapCell(pickCell(e.clientX - r.left, e.clientY - r.top));
+  }
+  drag = null;
+});
+CV.addEventListener('pointercancel', () => { drag = null; CV.classList.remove('dragging'); });
+CV.addEventListener('wheel', e => {
+  e.preventDefault();
+  CAM.tDist = Math.max(3.4, Math.min(11, CAM.tDist + Math.sign(e.deltaY)*0.42));
+}, {passive:false});
+
+/* =============================================================================
+   ส่วนที่ 6 — เสียง (สังเคราะห์เอง ไม่มีไฟล์เสียง)
+   ============================================================================= */
+let AC = null, SOUND = true;
+function ac(){ if(!AC) AC = new (window.AudioContext || window.webkitAudioContext)(); return AC; }
+
+function sfx(kind){
+  if(!SOUND) return;
+  try{
+    const c = ac();
+    if(c.state === 'suspended') c.resume();
+    const now = c.currentTime;
+
+    if(kind === 'place' || kind === 'move'){
+      // เสียง "แคว่ก" ของหมากโก๊ะ = noise burst ผ่าน bandpass + คลื่นเบสสั้น ๆ
+      const len = 0.09, buf = c.createBuffer(1, Math.ceil(c.sampleRate*len), c.sampleRate);
+      const d = buf.getChannelData(0);
+      for(let i=0;i<d.length;i++) d[i] = (Math.random()*2-1) * Math.pow(1 - i/d.length, 3.2);
+      const src = c.createBufferSource(); src.buffer = buf;
+      const bp = c.createBiquadFilter(); bp.type = 'bandpass';
+      bp.frequency.value = kind === 'place' ? 2100 : 1500; bp.Q.value = 4.5;
+      const g = c.createGain(); g.gain.value = kind === 'place' ? 0.30 : 0.18;
+      src.connect(bp).connect(g).connect(c.destination); src.start(now);
+
+      const o = c.createOscillator(), og = c.createGain();
+      o.type = 'sine'; o.frequency.setValueAtTime(kind==='place'?260:200, now);
+      o.frequency.exponentialRampToValueAtTime(90, now+0.07);
+      og.gain.setValueAtTime(0.16, now); og.gain.exponentialRampToValueAtTime(0.001, now+0.09);
+      o.connect(og).connect(c.destination); o.start(now); o.stop(now+0.1);
+
+    } else if(kind === 'tick'){
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = 'triangle'; o.frequency.value = 880;
+      g.gain.setValueAtTime(0.07, now); g.gain.exponentialRampToValueAtTime(0.001, now+0.06);
+      o.connect(g).connect(c.destination); o.start(now); o.stop(now+0.07);
+
+    } else if(kind === 'nope'){
+      const o = c.createOscillator(), g = c.createGain();
+      o.type = 'square'; o.frequency.setValueAtTime(150, now);
+      o.frequency.linearRampToValueAtTime(96, now+0.10);
+      g.gain.setValueAtTime(0.05, now); g.gain.exponentialRampToValueAtTime(0.001, now+0.12);
+      o.connect(g).connect(c.destination); o.start(now); o.stop(now+0.13);
+
+    } else if(kind === 'win'){
+      [0,0.11,0.22,0.36].forEach((dt,i) => {
+        const o = c.createOscillator(), g = c.createGain();
+        o.type = 'sine'; o.frequency.value = [523.25,659.25,783.99,1046.5][i];
+        g.gain.setValueAtTime(0, now+dt);
+        g.gain.linearRampToValueAtTime(0.16, now+dt+0.02);
+        g.gain.exponentialRampToValueAtTime(0.001, now+dt+0.42);
+        o.connect(g).connect(c.destination); o.start(now+dt); o.stop(now+dt+0.45);
+      });
+    } else if(kind === 'draw'){
+      [392,349.23].forEach((f,i) => {
+        const o = c.createOscillator(), g = c.createGain();
+        o.type = 'sine'; o.frequency.value = f;
+        g.gain.setValueAtTime(0, now+i*0.16);
+        g.gain.linearRampToValueAtTime(0.12, now+i*0.16+0.03);
+        g.gain.exponentialRampToValueAtTime(0.001, now+i*0.16+0.4);
+        o.connect(g).connect(c.destination); o.start(now+i*0.16); o.stop(now+i*0.16+0.42);
+      });
+    }
+  }catch(_){}
+}
+
+/* =============================================================================
+   ส่วนที่ 7 — ออนไลน์ผ่าน WebRTC (PeerJS)
+   ============================================================================= */
+const NET = { peer:null, conn:null, host:false, ready:false, code:'' };
+const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const PEER_PREFIX = 'hpxo3d-';
+
+function loadPeerJS(){
+  return new Promise((res, rej) => {
+    if(window.Peer) return res();
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js';
+    s.onload = () => res();
+    s.onerror = () => rej(new Error('โหลดไลบรารีเชื่อมต่อไม่สำเร็จ'));
+    document.head.appendChild(s);
+  });
+}
+function randCode(){
+  let s = '';
+  for(let i=0;i<5;i++) s += CODE_CHARS[(Math.random()*CODE_CHARS.length)|0];
+  return s;
+}
+
+function netStatus(el, msg, cls){
+  const e = document.getElementById(el);
+  e.textContent = msg;
+  e.className = 'status' + (cls ? ' '+cls : '');
+}
+
+async function hostRoom(){
+  document.getElementById('netHome').style.display = 'none';
+  document.getElementById('netHost').style.display = 'block';
+  document.getElementById('roomCode').textContent = '·····';
+  netStatus('hostStatus', 'กำลังเตรียมห้อง', '');
+  document.getElementById('hostStatus').classList.add('dots');
+
+  try{ await loadPeerJS(); }
+  catch(err){ netStatus('hostStatus','เชื่อมต่ออินเทอร์เน็ตไม่ได้ (โหลด PeerJS ไม่สำเร็จ)','err');
+              document.getElementById('hostStatus').classList.remove('dots'); return; }
+
+  const tryOnce = (attempt) => {
+    const code = randCode();
+    const peer = new Peer(PEER_PREFIX + code, {debug:0});
+    NET.peer = peer; NET.host = true; NET.code = code;
+
+    peer.on('open', () => {
+      document.getElementById('roomCode').textContent = code;
+      netStatus('hostStatus', 'กำลังรอเพื่อนเข้าห้อง', '');
+      document.getElementById('hostStatus').classList.add('dots');
+    });
+    peer.on('connection', conn => {
+      NET.conn = conn;
+      wireConn(conn, () => {
+        conn.send({t:'init', opts:OPTS});   // เจ้าของห้องเป็นคนกำหนดกติกา
+        startNetGame(BLACK);
+      });
+    });
+    peer.on('error', err => {
+      if(err.type === 'unavailable-id' && attempt < 4){ peer.destroy(); tryOnce(attempt+1); return; }
+      document.getElementById('hostStatus').classList.remove('dots');
+      netStatus('hostStatus', 'เปิดห้องไม่สำเร็จ: ' + (err.type || err.message), 'err');
+    });
+  };
+  tryOnce(0);
+}
+
+async function joinRoom(code){
+  code = (code||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if(code.length !== 5){ netStatus('joinStatus','รหัสห้องต้องมี 5 ตัวอักษร','err'); return; }
+  netStatus('joinStatus', 'กำลังเชื่อมต่อ', '');
+  document.getElementById('joinStatus').classList.add('dots');
+
+  try{ await loadPeerJS(); }
+  catch(err){ netStatus('joinStatus','เชื่อมต่ออินเทอร์เน็ตไม่ได้ (โหลด PeerJS ไม่สำเร็จ)','err');
+              document.getElementById('joinStatus').classList.remove('dots'); return; }
+
+  const peer = new Peer({debug:0});
+  NET.peer = peer; NET.host = false; NET.code = code;
+  let settled = false;
+
+  peer.on('open', () => {
+    const conn = peer.connect(PEER_PREFIX + code, {reliable:true});
+    NET.conn = conn;
+    wireConn(conn, () => { settled = true; });
+    setTimeout(() => {
+      if(!settled){
+        document.getElementById('joinStatus').classList.remove('dots');
+        netStatus('joinStatus', 'ไม่พบห้องนี้ หรือเจ้าของห้องออฟไลน์', 'err');
+      }
+    }, 9000);
+  });
+  peer.on('error', err => {
+    document.getElementById('joinStatus').classList.remove('dots');
+    netStatus('joinStatus', err.type === 'peer-unavailable' ? 'ไม่พบห้องรหัสนี้' : ('ผิดพลาด: ' + (err.type||err.message)), 'err');
+  });
+}
+
+function wireConn(conn, onOpen){
+  conn.on('open', () => { onOpen && onOpen(); });
+  conn.on('data', msg => {
+    if(!msg || !msg.t) return;
+    if(msg.t === 'init'){                        // ผู้เข้าร่วมรับกติกาจากเจ้าของห้อง
+      Object.assign(OPTS, msg.opts);
+      syncOptUI();
+      startNetGame(WHITE);
+    } else if(msg.t === 'act'){
+      doMove(msg.mv);
+    } else if(msg.t === 'restart'){
+      MYCOLOR = msg.color;
+      resetGame();
+      toast('เริ่มเกมใหม่แล้ว');
+    } else if(msg.t === 'bye'){
+      NET.ready = false; setNetBadge(false, 'เพื่อนออกจากห้อง'); toast('เพื่อนออกจากห้องแล้ว');
+    }
+  });
+  conn.on('close', () => { NET.ready = false; setNetBadge(false, 'หลุดการเชื่อมต่อ'); refreshUI(); });
+  conn.on('error', () => { NET.ready = false; setNetBadge(false, 'ผิดพลาด'); });
+}
+
+function startNetGame(myColor){
+  MODE = 'net'; MYCOLOR = myColor; NET.ready = true;
+  hide('ovNet'); hide('ovMenu');
+  document.getElementById('hud').style.display = '';
+  setNetBadge(true, 'ห้อง ' + NET.code);
+  resetGame();
+  toast(myColor === BLACK ? 'คุณคือหมากดำ — เดินก่อนเลย' : 'คุณคือหมากขาว — รออีกฝ่ายเดิน');
+}
+
+function setNetBadge(ok, txt){
+  const b = document.getElementById('netBadge');
+  b.classList.toggle('show', MODE === 'net');
+  document.getElementById('netLed').className = 'led' + (ok ? '' : ' off');
+  document.getElementById('netTxt').textContent = txt;
+}
+
+window.addEventListener('beforeunload', () => {
+  try{ if(NET.conn && NET.conn.open) NET.conn.send({t:'bye'}); }catch(_){}
+});
+
+/* =============================================================================
+   ส่วนที่ 8 — UI
+   ============================================================================= */
+const $ = id => document.getElementById(id);
+const show = id => $(id).classList.add('show');
+const hide = id => $(id).classList.remove('show');
+
+let toastTimer = null;
+function toast(msg){
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+
+function nameOf(color){
+  if(MODE === 'ai')  return color === MYCOLOR ? 'คุณ' : 'คอมพิวเตอร์';
+  if(MODE === 'net') return color === MYCOLOR ? 'คุณ' : 'เพื่อน';
+  return color === BLACK ? 'ผู้เล่น 1' : 'ผู้เล่น 2';
+}
+
+function refreshUI(){
+  $('sideB').classList.toggle('on', !G.over && G.turn === BLACK);
+  $('sideW').classList.toggle('on', !G.over && G.turn === WHITE);
+  $('nmB').textContent = nameOf(BLACK);
+  $('nmW').textContent = nameOf(WHITE);
+
+  for(const [el, color, cls] of [[$('pipB'), BLACK, 'b'], [$('pipW'), WHITE, 'w']]){
+    let h = '';
+    for(let i=0;i<3;i++) h += '<div class="pip ' + (i < 3-G.placed[color] ? 'f ' + cls : '') + '"></div>';
+    el.innerHTML = h;
+  }
+
+  $('bUndo').disabled = (MODE === 'net') || G.over || !G.history.length;
+  $('bUndo').style.display = MODE === 'net' ? 'none' : '';
+
+  // ข้อความใบ้
+  let msg;
+  if(G.over){
+    msg = G.winner === 0 ? 'เสมอ' : ('🏆 ' + nameOf(G.winner) + ' (' + (G.winner===BLACK?'ดำ':'ขาว') + ') ชนะ!');
+  } else if(!myTurn()){
+    msg = MODE === 'ai' ? 'คอมพิวเตอร์กำลังคิด…' : (NET.ready ? 'รอเพื่อนเดิน…' : 'รอการเชื่อมต่อ…');
+  } else if(G.placed[G.turn] < 3){
+    const left = 3 - G.placed[G.turn];
+    msg = 'วางหมาก' + (G.turn===BLACK?'ดำ':'ขาว') + ' — เหลืออีก <b>' + left + '</b> เม็ด';
+  } else if(G.sel === null){
+    msg = 'หมากครบแล้ว — เลือกหมากของคุณเพื่อ<b>เดิน</b>';
+  } else {
+    msg = OPTS.adjOnly ? 'เลือกช่องว่างที่<b>ติดกัน</b>เพื่อย้ายไป' : 'เลือกช่องว่างที่จะย้ายไป';
+  }
+  $('hint').innerHTML = msg;
+}
+
+function showResult(){
+  const win = G.winner;
+  let em, title, sub;
+  if(win === 0){ em = '🤝'; title = 'เสมอ'; sub = 'ไม่มีใครเรียงสามได้'; }
+  else if(MODE === 'local'){ em = win===BLACK ? '⚫' : '⚪'; title = nameOf(win) + ' ชนะ!'; sub = 'เรียงสามได้ก่อน'; }
+  else if(win === MYCOLOR){ em = '🏆'; title = 'คุณชนะ!'; sub = 'เรียงสามได้ก่อน เก่งมาก'; }
+  else { em = '😵'; title = 'คุณแพ้'; sub = MODE === 'ai' ? 'ลองใหม่อีกทีสิ' : 'เอาคืนซะ'; }
+  $('rslEm').textContent = em; $('rslTitle').textContent = title; $('rslSub').textContent = sub;
+  show('ovResult');
+}
+
+function syncOptUI(){
+  $('swAdj').classList.toggle('on', OPTS.adjOnly);
+  $('swCtr').classList.toggle('on', OPTS.noCenterFirst);
+}
+
+function startGame(mode){
+  MODE = mode;
+  MYCOLOR = BLACK;
+  hide('ovMenu'); hide('ovNet');
+  $('hud').style.display = '';
+  $('netBadge').classList.remove('show');
+  resetGame();
+}
+
+function backToMenu(){
+  try{ if(NET.conn && NET.conn.open) NET.conn.send({t:'bye'}); }catch(_){}
+  if(NET.peer){ try{ NET.peer.destroy(); }catch(_){} }
+  NET.peer = NET.conn = null; NET.ready = false;
+  $('hud').style.display = 'none';
+  $('netBadge').classList.remove('show');
+  hide('ovResult'); hide('ovNet');
+  show('ovMenu');
+  $('netHome').style.display = ''; $('netHost').style.display = 'none'; $('netJoin').style.display = 'none';
+  MODE = 'menu';
+  PIECES = []; G.board.fill(0); G.sel = null; G.over = false; WINFLAG[0] = 0;
+  G.placed = [0,0,0]; G.turn = BLACK;
+}
+
+/* ── ผูกปุ่มทั้งหมด ─────────────────────────────────────────────── */
+$('mAi').onclick    = () => startGame('ai');
+$('mLocal').onclick = () => startGame('local');
+$('mNet').onclick   = () => { hide('ovMenu'); show('ovNet'); };
+
+$('segLv').onclick = e => {
+  const b = e.target.closest('button'); if(!b) return;
+  [...$('segLv').children].forEach(x => x.classList.remove('on'));
+  b.classList.add('on'); OPTS.level = +b.dataset.lv;
+};
+$('swAdj').onclick = function(){ OPTS.adjOnly = !OPTS.adjOnly; this.classList.toggle('on', OPTS.adjOnly); };
+$('swCtr').onclick = function(){ OPTS.noCenterFirst = !OPTS.noCenterFirst; this.classList.toggle('on', OPTS.noCenterFirst); };
+
+$('nCreate').onclick  = hostRoom;
+$('nJoinBtn').onclick = () => { $('netHome').style.display = 'none'; $('netJoin').style.display = 'block'; $('joinCode').focus(); };
+$('nGo').onclick      = () => joinRoom($('joinCode').value);
+$('joinCode').addEventListener('keydown', e => { if(e.key === 'Enter') joinRoom($('joinCode').value); });
+$('joinCode').addEventListener('input', function(){ this.value = this.value.toUpperCase().replace(/[^A-Z0-9]/g,''); });
+$('nCopy').onclick = () => {
+  navigator.clipboard.writeText(NET.code).then(() => toast('คัดลอกรหัส ' + NET.code + ' แล้ว'))
+    .catch(() => toast('รหัสห้อง: ' + NET.code));
+};
+$('nShare').onclick = () => {
+  const url = location.href.split('#')[0] + '#' + NET.code;
+  const txt = 'มาเล่นหมากสามเรียง 3D กัน! รหัสห้อง: ' + NET.code + '\n' + url;
+  if(navigator.share) navigator.share({title:'หมากสามเรียง 3D', text:txt}).catch(()=>{});
+  else navigator.clipboard.writeText(txt).then(() => toast('คัดลอกลิงก์ชวนเล่นแล้ว')).catch(() => toast(url));
+};
+$('nBack').onclick = () => {
+  if(NET.peer){ try{ NET.peer.destroy(); }catch(_){} NET.peer = null; }
+  $('netHome').style.display = ''; $('netHost').style.display = 'none'; $('netJoin').style.display = 'none';
+  hide('ovNet'); show('ovMenu');
+};
+
+$('bBack').onclick  = backToMenu;
+$('bReset').onclick = () => {
+  if(MODE === 'net'){
+    if(!NET.ready){ toast('ยังไม่ได้เชื่อมต่อ'); return; }
+    MYCOLOR = 3 - MYCOLOR;                       // สลับสีทุกกระดานใหม่
+    NET.conn.send({t:'restart', color:3-MYCOLOR});
+    resetGame();
+    toast('เริ่มใหม่ — คุณคือหมาก' + (MYCOLOR===BLACK?'ดำ':'ขาว'));
+  } else if(MODE === 'ai'){
+    MYCOLOR = 3 - MYCOLOR;                       // สลับกันเดินก่อนทุกกระดานใหม่
+    resetGame();
+    toast(MYCOLOR===BLACK ? 'คุณคือหมากดำ — เดินก่อน' : 'คุณคือหมากขาว — คอมพิวเตอร์เดินก่อน');
+  } else resetGame();
+};
+$('bUndo').onclick = () => {
+  if(MODE === 'net' || !G.history.length) return;
+  // โหมดคอม: ย้อนสองตา (ของคอมกับของเรา) เพื่อกลับมาเป็นตาเรา
+  const steps = (MODE === 'ai') ? Math.min(2, G.history.length) : 1;
+  for(let i=0;i<steps;i++){
+    const h = G.history.pop();
+    G.board = h.board; G.turn = h.turn; G.placed = h.placed; G.moves = h.moves;
+  }
+  G.sel = null; G.over = false; G.winner = 0; G.winLine = null; WINFLAG[0] = 0; G.rep.clear();
+  rebuildPieces();
+  hide('ovResult');
+  refreshUI();
+  sfx('tick');
+};
+$('bView').onclick = () => {
+  const views = [[0.62,0.86,6.4],[0,1.35,5.9],[Math.PI*0.5,0.55,6.6],[-0.7,0.42,7.0]];
+  $('bView')._i = (($('bView')._i || 0) + 1) % views.length;
+  const v = views[$('bView')._i];
+  CAM.tYaw = v[0]; CAM.tPitch = v[1]; CAM.tDist = v[2];
+};
+$('bSound').onclick = () => {
+  SOUND = !SOUND;
+  $('bSound').textContent = SOUND ? '♪' : '🔇';
+  if(SOUND) sfx('tick');
+};
+$('rAgain').onclick = () => { hide('ovResult'); $('bReset').onclick(); };
+$('rMenu').onclick  = () => { hide('ovResult'); backToMenu(); };
+
+// สร้างหมากใหม่จากกระดานปัจจุบัน (ใช้ตอนกดย้อน)
+function rebuildPieces(){
+  PIECES = [];
+  for(let i=0;i<9;i++){
+    if(!G.board[i]) continue;
+    const p = cellPos(i);
+    PIECES.push({ owner:G.board[i], cell:i, x:p[0], y:p[1], z:p[2], s:1, anim:null });
+  }
+}
+
+/* ── เริ่มระบบ ─────────────────────────────────────────────────── */
+if(!initGL()){
+  document.body.innerHTML =
+    '<div style="display:flex;height:100%;align-items:center;justify-content:center;text-align:center;' +
+    'font:600 15px var(--font);color:#C0873F;padding:30px;line-height:1.7">' +
+    'เบราว์เซอร์นี้เปิด WebGL ไม่ได้ครับ<br><span style="color:#9E8E84;font-weight:400;font-size:13px">' +
+    'ลองเปิดด้วย Chrome / Edge รุ่นใหม่ หรือเปิดการเร่งความเร็วด้วยฮาร์ดแวร์ในตั้งค่าเบราว์เซอร์</span></div>';
+} else {
+  syncOptUI();
+  refreshUI();
+  requestAnimationFrame(frame);
+  // เปิดลิงก์ที่มี #รหัสห้อง → เด้งเข้าหน้าเข้าร่วมห้องให้เลย
+  const hash = location.hash.replace('#','').toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if(hash.length === 5){
+    hide('ovMenu'); show('ovNet');
+    $('netHome').style.display = 'none'; $('netJoin').style.display = 'block';
+    $('joinCode').value = hash;
+  }
+}
+</script>
+</body>
+</html>
