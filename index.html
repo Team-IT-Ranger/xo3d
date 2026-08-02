@@ -72,6 +72,16 @@
   .pip.f.w{ background:#efe6d6; }
   .vs{ font:800 11px var(--font); color:#6b5f57; letter-spacing:1px; }
 
+  /* ── วงแหวนนับถอยหลัง (โหมดจับเวลา) ── */
+  .clockBadge{ position:relative; width:34px; height:34px; display:none; align-items:center; justify-content:center; flex:none; }
+  .clockBadge.show{ display:flex; }
+  .clockRing{ position:absolute; inset:0; transform:rotate(-90deg); }
+  .clockBg{ fill:none; stroke:rgba(255,255,255,.14); stroke-width:3; }
+  .clockFg{ fill:none; stroke:var(--gold); stroke-width:3; stroke-linecap:round; transition:stroke .15s; }
+  .clockFg.low{ stroke:#E05A4A; }
+  .clockNum{ position:relative; z-index:1; font:800 12px var(--font); color:#F0DFC9; }
+  .clockNum.low{ color:#FF8A7A; }
+
   /* ข้อความใบ้ล่างจอ */
   .hint{ position:absolute; bottom:78px; left:50%; transform:translateX(-50%);
     background:rgba(20,14,11,.8); border:1px solid var(--line); border-radius:999px;
@@ -186,6 +196,14 @@
       </div>
     </div>
     <div class="vs">VS</div>
+    <div class="clockBadge" id="clockBadge">
+      <svg class="clockRing" viewBox="0 0 36 36">
+        <circle class="clockBg" cx="18" cy="18" r="15.5"></circle>
+        <circle class="clockFg" id="clockFg" cx="18" cy="18" r="15.5"
+                stroke-dasharray="97.39" stroke-dashoffset="0"></circle>
+      </svg>
+      <span class="clockNum" id="clockNum">5</span>
+    </div>
     <div class="side" id="sideW">
       <div class="stone w"></div>
       <div>
@@ -248,6 +266,11 @@
         <div class="t">เดินได้เฉพาะช่องติดกัน
           <small>ปิด = ย้ายไปช่องว่างไหนก็ได้</small></div>
         <div class="sw" id="swAdj"></div>
+      </div>
+      <div class="opt">
+        <div class="t">จับเวลาคิด 5 วินาทีต่อตา
+          <small>หมดเวลาเสียตานี้ให้อีกฝ่ายทันที</small></div>
+        <div class="sw" id="swClock"></div>
       </div>
     </div>
 
@@ -774,6 +797,7 @@ function frame(now){
 
   resize();
   updateCam(dt);
+  checkClock();
   updatePieces(now/1000);
 
   GL.viewport(0, 0, CV.width, CV.height);
@@ -845,10 +869,40 @@ function applyBoardSize(n){
   CAM.yaw = CAM.tYaw = 0; CAM.pitch = CAM.tPitch = 0.55; CAM.dist = CAM.tDist = 8.4*k;
 }
 
-const OPTS = { adjOnly:false, level:2 };
+const OPTS = { adjOnly:false, level:2, clock:false };
 let MODE = 'ai';            // 'ai' | 'local' | 'net'
 let MYCOLOR = 1;            // สีของผู้เล่นเครื่องนี้ (โหมด ai / net)
 const BLACK = 1, WHITE = 2;
+
+// ── โหมดจับเวลา ── ฝั่งละ 5 วินาทีต่อตา หมดเวลาเสียตานี้ให้อีกฝ่ายทันที (ไม่ใช่แพ้เกม)
+// AI ไม่ต้องคิดเรื่องนี้เป็นพิเศษ เพราะงบเวลาคิดของ AI (สูงสุด 1.4 วิ) เร็วกว่า 5 วิเสมออยู่แล้ว
+const CLOCK_SECONDS = 5;
+let turnDeadline = 0;
+function startClock(){ turnDeadline = performance.now() + CLOCK_SECONDS*1000; }
+
+// เรียกทุกเฟรมจาก frame() — ตรวจว่าหมดเวลาตาของ "เครื่องนี้" หรือยัง (เฉพาะตอน myTurn() จริง
+// เท่านั้น เพื่อไม่ให้ไปนับเวลาแทนอีกฝ่ายตอนเล่นออนไลน์ ซึ่งจะเสี่ยงหลุดซิงก์กันได้)
+function checkClock(){
+  updateClockUI();
+  if(!OPTS.clock || G.over || !myTurn()) return;
+  if(performance.now() > turnDeadline) skipTurn();
+}
+
+function updateClockUI(){
+  const active = OPTS.clock && !G.over && myTurn();
+  const badge = $('clockBadge');
+  badge.classList.toggle('show', active);
+  if(!active) return;
+  const remain = Math.max(0, (turnDeadline - performance.now())/1000);
+  const frac = Math.min(1, remain / CLOCK_SECONDS);
+  const circ = 97.39;   // 2*PI*15.5 (รัศมีวงแหวนใน SVG)
+  const fg = $('clockFg');
+  fg.style.strokeDashoffset = circ * (1 - frac);
+  const low = remain <= 1.5;
+  fg.classList.toggle('low', low);
+  $('clockNum').classList.toggle('low', low);
+  $('clockNum').textContent = remain <= 0.05 ? '0' : remain.toFixed(1);
+}
 
 const G = {
   board: new Array(CELLS).fill(0),
@@ -859,6 +913,7 @@ const G = {
   winner: 0,
   winLine: null,
   moves: 0,
+  skipStreak: 0,             // นับตาที่โดนหมดเวลาติดกัน — กันสถานการณ์ทั้งคู่ปล่อยเวลาหมดไม่รู้จบ
   rep: new Map(),
   history: []
 };
@@ -965,6 +1020,7 @@ function doMove(mv, silent){
 
   G.sel = null;
   G.moves++;
+  G.skipStreak = 0;    // มีการเดินจริงเกิดขึ้น เคลียร์ตัวนับหมดเวลาติดต่อกัน
 
   const L = checkWin(G.board, turn);
   if(L){ endGame(turn, L); return true; }
@@ -976,9 +1032,28 @@ function doMove(mv, silent){
   if(n >= 3 || G.moves > 200){ endGame(0, null); return true; }
 
   G.turn = 3 - turn;
+  startClock();
   refreshUI();
   if(MODE === 'ai' && G.turn !== MYCOLOR && !G.over) setTimeout(aiTurn, 380);
   return true;
+}
+
+// หมดเวลาคิด — เสียตานี้ให้อีกฝ่ายทันที (ไม่ใช่แพ้เกม ไม่แตะกระดาน) แล้วส่งแจ้งอีกฝั่งถ้าเล่นออนไลน์
+// ⚠️ ถ้าทั้งคู่ปล่อยเวลาหมดติดกันหลายตอ (skipStreak) ถือว่าไม่มีใครอยากเดิน จบเกมเป็นเสมอ
+// กันเกมค้างไม่รู้จบ
+function skipTurn(fromNetwork){
+  if(G.over) return;
+  const who = G.turn;
+  toast('⏱ หมดเวลา! ' + (who===BLACK?'ดำ':'ขาว') + ' เสียตานี้ให้อีกฝ่าย');
+  sfx('nope');
+  G.skipStreak++;
+  if(G.skipStreak >= 6){ endGame(0, null); return; }   // สามรอบติดไม่มีใครเดิน = เสมอ
+  G.turn = 3 - who;
+  G.sel = null;
+  startClock();
+  refreshUI();
+  if(!fromNetwork && MODE === 'net' && NET.conn && NET.conn.open) NET.conn.send({t:'skip'});
+  if(MODE === 'ai' && G.turn !== MYCOLOR && !G.over) setTimeout(aiTurn, 380);
 }
 
 function endGame(winner, L){
@@ -995,10 +1070,11 @@ function endGame(winner, L){
 
 function resetGame(){
   G.board.fill(0); G.turn = BLACK; G.placed = [0,0,0]; G.sel = null;
-  G.over = false; G.winner = 0; G.winLine = null; G.moves = 0;
+  G.over = false; G.winner = 0; G.winLine = null; G.moves = 0; G.skipStreak = 0;
   G.rep.clear(); G.history.length = 0;
   PIECES = [];
   WINFLAG[0] = 0;
+  startClock();
   hide('ovResult');
   refreshUI();
   if(MODE === 'ai' && G.turn !== MYCOLOR) setTimeout(aiTurn, 520);
@@ -1470,6 +1546,8 @@ function wireConn(conn, onOpen){
       startNetGame(WHITE);
     } else if(msg.t === 'act'){
       doMove(msg.mv);
+    } else if(msg.t === 'skip'){                  // อีกฝ่ายหมดเวลาคิด เสียตานั้นไป
+      skipTurn(true);
     } else if(msg.t === 'restart'){
       MYCOLOR = msg.color;
       resetGame();
@@ -1566,6 +1644,7 @@ function showResult(){
 
 function syncOptUI(){
   $('swAdj').classList.toggle('on', OPTS.adjOnly);
+  $('swClock').classList.toggle('on', OPTS.clock);
 }
 
 function startGame(mode){
@@ -1612,6 +1691,7 @@ $('segBoard').onclick = e => {
   $('menuSub').textContent = `3D · กระดาน ${SELECTED_BOARD_N}×${SELECTED_BOARD_N} · ฝั่งละ ${SELECTED_BOARD_N} เม็ด · เรียงสามชนะ`;
 };
 $('swAdj').onclick = function(){ OPTS.adjOnly = !OPTS.adjOnly; this.classList.toggle('on', OPTS.adjOnly); };
+$('swClock').onclick = function(){ OPTS.clock = !OPTS.clock; this.classList.toggle('on', OPTS.clock); };
 
 $('nCreate').onclick  = hostRoom;
 $('nJoinBtn').onclick = () => { $('netHome').style.display = 'none'; $('netJoin').style.display = 'block'; $('joinCode').focus(); };
