@@ -11,9 +11,11 @@
        - กระดานไม้ = rounded box + ลายไม้ procedural
        - หมากโก๊ะ  = "เลนส์" (intersection ของทรงกลมสองลูก) ซึ่งเป็นรูปทรงจริงของหมากโก๊ะ
        - มีเงานุ่ม (soft shadow), ambient occlusion, พื้นสะท้อนเงา
-     • กติกา: กระดาน 4×4 ฝั่งละ 4 เม็ด วางครบแล้วเข้าสู่ "โหมดเดินหมาก" ใครเรียงสามได้ก่อนชนะ
-       (กระดาน 4×4 มีแนวชนะที่นับได้ 24 เส้น มากกว่ากระดาน 3×3 เดิมที่มีแค่ 8 เส้น
-        เกมเลยตัดสินไวกว่ามาก ไม่ต้องพึ่งดวงเหมือนกระดานเล็ก)
+     • กติกา: เลือกกระดานได้จากเมนู 3×3 (คลาสสิก ฝั่งละ 3 เม็ด) หรือ 4×4 (ฝั่งละ 4 เม็ด
+       แนวชนะซ้อนทับกันได้ถึง 24 เส้น เทียบกับ 3×3 ที่มีแค่ 8 เส้น ตัดสินไวกว่ามาก)
+       วางครบแล้วเข้าสู่ "โหมดเดินหมาก" ใครเรียงสามได้ก่อนชนะ — ขนาดกระดานสูงสุดที่รองรับ
+       (4×4) เป็นตัวกำหนดขนาด array คงที่ใน shader เปลี่ยนขนาดที่เล่นจริงผ่าน uniform
+       uBoardN ไม่ต้องคอมไพล์ shader ใหม่ตอนสลับ (ดู applyBoardSize ในสคริปต์)
      • โหมด: แข่งกับคอมพิวเตอร์ / แข่งกับเพื่อนเครื่องเดียวกัน / ออนไลน์ด้วยรหัสห้อง
      • ออนไลน์ใช้ WebRTC ผ่าน PeerJS (โหลดจาก CDN ตอนกดเล่นออนไลน์เท่านั้น)
        ไม่ต้องมีเซิร์ฟเวอร์ของเราเอง — ข้อมูลวิ่งตรงระหว่างสองเครื่อง
@@ -209,7 +211,15 @@
 <div class="ov show" id="ovMenu">
   <div class="panel">
     <div class="title">หมากสามเรียง</div>
-    <div class="sub">3D · กระดาน 4×4 · ฝั่งละ 4 เม็ด · เรียงสามชนะ</div>
+    <div class="sub" id="menuSub">3D · กระดาน 4×4 · ฝั่งละ 4 เม็ด · เรียงสามชนะ</div>
+
+    <div class="grp">
+      <div class="lbl">ขนาดกระดาน</div>
+      <div class="seg" id="segBoard" style="margin-bottom:12px">
+        <button data-n="3">3×3 คลาสสิก</button>
+        <button data-n="4" class="on">4×4 ตัดสินไว</button>
+      </div>
+    </div>
 
     <div class="grp">
       <div class="lbl">เลือกโหมด</div>
@@ -307,18 +317,23 @@ const CV = document.getElementById('gl');
 const GL = CV.getContext('webgl2', {antialias:false, alpha:false, powerPreference:'high-performance'})
         || CV.getContext('webgl',  {antialias:false, alpha:false, powerPreference:'high-performance'});
 
-// ── ขนาดกระดาน ── ต้องประกาศไว้ก่อน FS_SRC เพราะ shader อ้างอิงค่าพวกนี้โดยตรง
-// (แทรกผ่าน JS template literal — เปลี่ยนที่นี่ที่เดียว กระดาน/หมาก/เชดเดอร์ตามกันหมด)
-const BOARD_N = 4;                       // กระดาน N×N
-const PIECES_PER_SIDE = 4;               // หมากต่อฝั่ง
-const CELLS = BOARD_N * BOARD_N;
-const MAX_PIECES = PIECES_PER_SIDE * 2;
-const ALL_CELLS = Array.from({length:CELLS}, (_,i) => i);
-const BOARD_HALF = BOARD_N / 2;          // ครึ่งความกว้างกระดาน (cell กว้าง 1 หน่วยเท่ากันทุกขนาดกระดาน)
-const N_F = BOARD_N.toFixed(1);                        // ค่าคงที่ float สำหรับฝัง GLSL
-const CENTER_OFF = ((BOARD_N-1)/2).toFixed(3);
-const HALF_F = BOARD_HALF.toFixed(3);
-const BOARD_EXT = (BOARD_HALF + 0.22).toFixed(3);      // ครึ่งความกว้างของ "กล่อง" กระดานจริง (เผื่อขอบ)
+// ── ขนาดกระดาน ── รองรับให้ผู้เล่นเลือกได้ระหว่าง 3×3 (คลาสสิก) กับ 4×4 (แนวชนะเยอะ ตัดสินไว)
+// shader คอมไพล์ครั้งเดียวโดยจองพื้นที่ไว้สำหรับกระดานใหญ่สุด (4×4) เสมอ — ต้องประกาศ MAX_*
+// ไว้ก่อน FS_SRC เพราะ shader อ้างอิงผ่าน JS template literal ตอนคอมไพล์
+// ส่วนขนาดกระดานที่ "กำลังเล่นอยู่จริง" (BOARD_N ฯลฯ ด้านล่าง) เป็นตัวแปรเปลี่ยนได้ ส่งเข้า
+// shader ผ่าน uniform uBoardN แทน — ช่อง/หมากที่เกินขนาดกระดานที่เลือกจะไม่ถูกวาดเพราะค่า
+// w (หมาก) / uCell (ช่อง) เป็น 0 อยู่แล้ว ไม่ต้องคอมไพล์ shader ใหม่ตอนสลับขนาด
+const MAX_BOARD_N = 4;
+const MAX_PIECES_PER_SIDE = 4;
+const MAX_CELLS = MAX_BOARD_N * MAX_BOARD_N;     // 16 — ขนาด array คงที่ของ uCell ใน shader
+const MAX_PIECES = MAX_PIECES_PER_SIDE * 2;      // 8  — ขนาด array คงที่ของ uP/uPB ใน shader
+
+// ขนาดกระดานที่กำลังเล่นอยู่จริงตอนนี้ — ค่าเริ่มต้นตั้งไว้ก่อน applyBoardSize() จะมาคำนวณจริง
+let BOARD_N = 4, PIECES_PER_SIDE = 4, CELLS = 16;
+let ALL_CELLS = [], LINES = [], CELL_LINE_COUNT = [], ADJ = [];
+let BOARD_HALF = 2, CENTER_OFFSET = 1.5;
+let NO_CENTER_FIRST = false;    // จริงเฉพาะกระดานคี่ (3×3) ที่มีช่องกลางเดี่ยว ๆ — ตั้งใน applyBoardSize
+let ZOOM_MIN = 4.5, ZOOM_MAX = 14;
 
 const VS_SRC = `
 attribute vec2 aPos;
@@ -333,9 +348,11 @@ uniform float uTime;
 uniform vec3  uRo, uCx, uCy, uCz;   // กล้อง: ตำแหน่ง + แกน right/up/forward
 uniform vec4  uP[${MAX_PIECES}];    // หมาก: xyz = ตำแหน่ง, w = 0 ว่าง / 1 ดำ / 2 ขาว
 uniform vec4  uPB[${MAX_PIECES}];   // x = สเกล, y = ค่าเรืองแสง (ตอนถูกเลือก)
-uniform float uCell[${CELLS}];      // เอฟเฟกต์บนช่อง: 0 ปล่อย, 1 ชี้อยู่, 2 ลงได้, 3 ถูกเลือก
+uniform float uCell[${MAX_CELLS}];  // เอฟเฟกต์บนช่อง: 0 ปล่อย, 1 ชี้อยู่, 2 ลงได้, 3 ถูกเลือก
 uniform vec4  uWin;                 // เส้นชนะ: ax, az, bx, bz
 uniform vec2  uWinF;                // x = เปิด/ปิด, y = สีฝั่งไหน (0 ดำ 1 ขาว)
+uniform float uBoardN;              // ขนาดกระดานที่กำลังเล่นจริง (3.0 หรือ 4.0) — array ข้างบนจอง
+                                     // ไว้สำหรับกระดานใหญ่สุดเสมอ แต่ค่านี้กำหนดรูปทรงที่วาดจริง
 
 const float PI = 3.14159265;
 
@@ -378,9 +395,10 @@ float fbm(vec2 p){
 // การทดสอบเงาตรงรอยต่อจะรั่ว เกิดเป็นแถบสว่างพาดใต้ขอบกระดาน
 vec2 map(vec3 p){
   vec2 res = vec2(p.y + 0.22, 0.0);                                   // พื้น
-  float db = sdRoundBox(p - vec3(0.0,0.014,0.0), vec3(${BOARD_EXT},0.17,${BOARD_EXT}), 0.05);   // กระดาน
+  float bExt = uBoardN*0.5 + 0.22;    // ครึ่งความกว้างของ "กล่อง" กระดานจริง (เผื่อขอบ)
+  float db = sdRoundBox(p - vec3(0.0,0.014,0.0), vec3(bExt,0.17,bExt), 0.05);   // กระดาน
   if(db < res.x) res = vec2(db, 1.0);
-  for(int i=0;i<${MAX_PIECES};i++){
+  for(int i=0;i<${MAX_PIECES};i++){    // ลูปตัวคงที่สูงสุด — ช่องที่ไม่ได้ใช้มี w=0 ไม่ถูกวาด
     float on = step(0.5, uP[i].w);
     float sc = uPB[i].x;
     float d  = sdLens(p - uP[i].xyz, 0.355*sc, 0.105*sc);
@@ -461,11 +479,14 @@ vec3 boardDecal(vec3 p, out float emis){
   // ── เส้นตารางกริด (ฝังสีเข้ม) ──
   // ทั่วไปสำหรับกระดาน N×N ใด ๆ: เลื่อนพิกัดให้เริ่มที่ 0 แล้วหาระยะถึงเส้นแบ่งจำนวนเต็ม
   // ที่ใกล้ที่สุด (fract) — เส้นแบ่งภายในของ N ช่องอยู่ที่ตำแหน่งจำนวนเต็ม 1..N-1 พอดี
+  // N มาจาก uniform uBoardN ตอนนี้ (ไม่ใช่ค่าคงที่ฝัง compile-time) เพื่อให้สลับขนาดกระดาน
+  // ได้โดยไม่ต้องคอมไพล์ shader ใหม่
+  float bHalf = uBoardN*0.5;
   float w = 0.019, sm = 0.007;
-  float ux = q.x + ${HALF_F}, uz = q.y + ${HALF_F};
+  float ux = q.x + bHalf, uz = q.y + bHalf;
   float dgx = min(fract(ux), 1.0-fract(ux));
   float dgz = min(fract(uz), 1.0-fract(uz));
-  float inx = step(abs(q.x), ${HALF_F} - 0.03), inz = step(abs(q.y), ${HALF_F} - 0.03);
+  float inx = step(abs(q.x), bHalf - 0.03), inz = step(abs(q.y), bHalf - 0.03);
   float lx = smoothstep(w+sm, w-sm, dgx) * inz;
   float lz = smoothstep(w+sm, w-sm, dgz) * inx;
   float line = clamp(lx + lz, 0.0, 1.0);
@@ -473,17 +494,18 @@ vec3 boardDecal(vec3 p, out float emis){
 
   // ── กรอบทองบาง ๆ รอบตาราง ──
   float fr = max(abs(q.x), abs(q.y));
-  float frame = smoothstep(${(BOARD_HALF+0.055).toFixed(3)}, ${(BOARD_HALF+0.030).toFixed(3)}, fr)
-              * smoothstep(${(BOARD_HALF-0.020).toFixed(3)}, ${(BOARD_HALF+0.005).toFixed(3)}, fr);
+  float frame = smoothstep(bHalf+0.055, bHalf+0.030, fr)
+              * smoothstep(bHalf-0.020, bHalf+0.005, fr);
   wood = mix(wood, gold, frame*0.9);
   emis += frame*0.30;
 
-  // ── เอฟเฟกต์ต่อช่อง ──
-  for(int i=0;i<${CELLS};i++){
+  // ── เอฟเฟกต์ต่อช่อง ── ลูปตัวคงที่สูงสุดเสมอ ช่องเกินขนาดกระดานที่เลือกมี uCell=0 (ข้ามอัตโนมัติ)
+  float cOff = (uBoardN-1.0)*0.5;
+  for(int i=0;i<${MAX_CELLS};i++){
     float s = uCell[i];
     if(s < 0.5) continue;
     float fi = float(i);
-    vec2 c = vec2(mod(fi,${N_F}) - ${CENTER_OFF}, floor(fi/${N_F}) - ${CENTER_OFF});
+    vec2 c = vec2(mod(fi,uBoardN) - cOff, floor(fi/uBoardN) - cOff);
     float r = length(q - c);
     float pulse = 0.5 + 0.5*sin(uTime*3.4 - fi*0.4);
 
@@ -627,7 +649,7 @@ function initGL(){
   GL.enableVertexAttribArray(loc);
   GL.vertexAttribPointer(loc, 2, GL.FLOAT, false, 0, 0);
 
-  ['uRes','uTime','uRo','uCx','uCy','uCz','uWin','uWinF'].forEach(n => U[n] = GL.getUniformLocation(PROG, n));
+  ['uRes','uTime','uRo','uCx','uCy','uCz','uWin','uWinF','uBoardN'].forEach(n => U[n] = GL.getUniformLocation(PROG, n));
   U.uP    = GL.getUniformLocation(PROG, 'uP[0]');
   U.uPB   = GL.getUniformLocation(PROG, 'uPB[0]');
   U.uCell = GL.getUniformLocation(PROG, 'uCell[0]');
@@ -664,7 +686,8 @@ function norm(a){ const l = Math.hypot(a[0],a[1],a[2]) || 1; return [a[0]/l, a[1
    จึงต้องยิงรังสีชน "ตัวหมาก" (ทรงกระบอก) ก่อน แล้วค่อยตกลงระนาบกระดาน */
 const BOARD_TOP = 0.234;   // 0.22 + ระยะที่ยกกระดานลอยจากพื้นในเชดเดอร์
 const STONE_R = 0.36, STONE_H = 0.21;
-const CENTER_OFFSET = (BOARD_N-1)/2;   // เท่ากับ CENTER_OFF ฝั่งเชดเดอร์ (ต้องตรงกัน)
+// cellPos อ่าน BOARD_N/CENTER_OFFSET ปัจจุบัน (ตัวแปร ไม่ใช่ค่าคงที่) ตอนถูกเรียกจริง
+// เพื่อให้ตรงกับ cOff ฝั่งเชดเดอร์เสมอไม่ว่าจะสลับขนาดกระดานกี่รอบ
 const cellPos = i => [ (i%BOARD_N) - CENTER_OFFSET, BOARD_TOP + 0.105, Math.floor(i/BOARD_N) - CENTER_OFFSET ];
 
 function rayFrom(mx, my){
@@ -732,8 +755,9 @@ function pickCell(mx, my){
   return row*BOARD_N + col;
 }
 
-/* ── ลูปวาดภาพ ─────────────────────────────────────────────────── */
-const pieceBuf = new Float32Array(MAX_PIECES*4), pieceBufB = new Float32Array(MAX_PIECES*4), cellBuf = new Float32Array(CELLS);
+/* ── ลูปวาดภาพ ── buffer ต้องจองตามขนาดสูงสุด (MAX_*) เสมอ ไม่ใช่ขนาดที่เลือกเล่นอยู่ตอนนี้
+   เพราะ shader คอมไพล์ครั้งเดียวโดยจอง array ไว้ที่ MAX_PIECES/MAX_CELLS คงที่ ────────── */
+const pieceBuf = new Float32Array(MAX_PIECES*4), pieceBufB = new Float32Array(MAX_PIECES*4), cellBuf = new Float32Array(MAX_CELLS);
 let lastT = performance.now(), dpr = 1;
 
 function resize(){
@@ -764,43 +788,62 @@ function frame(now){
   GL.uniform1fv(U.uCell, cellBuf);
   GL.uniform4fv(U.uWin, WINLINE);
   GL.uniform2fv(U.uWinF, WINFLAG);
+  GL.uniform1f(U.uBoardN, BOARD_N);
   GL.drawArrays(GL.TRIANGLES, 0, 3);
 }
 
 /* =============================================================================
    ส่วนที่ 2 — ตรรกะเกม
    ============================================================================= */
+// สร้างทุกอย่างที่ขึ้นกับขนาดกระดานใหม่ทั้งหมด — เรียกตอนเลือกขนาดกระดานในเมนู (ก่อนเริ่มเกม)
+// และตอนโหมดออนไลน์ที่ผู้เข้าร่วมต้องซิงก์ขนาดกระดานให้ตรงกับเจ้าของห้อง
+//
 // เส้นชนะ = ทุกแนว 3 ช่องติดกัน (แนวนอน/ตั้ง/ทแยงทั้งสองทิศ) บนกระดาน BOARD_N×BOARD_N
 // กระดานยิ่งใหญ่ยิ่งมีแนวซ้อนทับกันได้เยอะ (4×4 = 24 เส้น เทียบกับ 3×3 ที่มีแค่ 8 เส้น)
-// เกมเลยตัดสินไวขึ้นมาก ไม่ต้องพึ่งดวงเหมือนกระดานเล็ก
-const LINES = (() => {
-  const L = [], idx = (r,c) => r*BOARD_N + c;
-  for(let r=0;r<BOARD_N;r++) for(let c=0;c<=BOARD_N-3;c++) L.push([idx(r,c),idx(r,c+1),idx(r,c+2)]);
-  for(let c=0;c<BOARD_N;c++) for(let r=0;r<=BOARD_N-3;r++) L.push([idx(r,c),idx(r+1,c),idx(r+2,c)]);
-  for(let r=0;r<=BOARD_N-3;r++) for(let c=0;c<=BOARD_N-3;c++) L.push([idx(r,c),idx(r+1,c+1),idx(r+2,c+2)]);
-  for(let r=0;r<=BOARD_N-3;r++) for(let c=2;c<BOARD_N;c++) L.push([idx(r,c),idx(r+1,c-1),idx(r+2,c-2)]);
-  return L;
-})();
-// น้ำหนักตำแหน่งสำหรับ AI: นับว่าแต่ละช่องเป็นส่วนหนึ่งของกี่เส้นชนะ (ช่องกลางเยอะสุด)
-const CELL_LINE_COUNT = (() => {
-  const c = new Array(CELLS).fill(0);
-  for(const L of LINES) for(const i of L) c[i]++;
-  return c;
-})();
-// ช่องที่ "ติดกัน" = เดินได้แบบราชาหมากรุก (รวมทแยง)
-const ADJ = (() => {
-  const a = [];
+// เกมเลยตัดสินไวขึ้นมาก ไม่ต้องพึ่งดวงเหมือนกระดานเล็ก — แต่ 3×3 แท่งยาวแค่ 3 ช่องพอดี
+// ไม่มีแนวไหนซ้อนทับ เลยไม่มีปัญหาฟอร์กแบบ 4×4 (ดู restrictForks)
+function applyBoardSize(n){
+  BOARD_N = n;
+  PIECES_PER_SIDE = n;              // 3×3 → หมากฝั่งละ 3 (คลาสสิก), 4×4 → ฝั่งละ 4
+  CELLS = BOARD_N * BOARD_N;
+  ALL_CELLS = Array.from({length:CELLS}, (_,i) => i);
+  BOARD_HALF = BOARD_N / 2;
+  CENTER_OFFSET = (BOARD_N - 1) / 2;
+  // กระดานคี่ (3×3) มีช่องกลางเดี่ยว ๆ — ห้ามลงกลางเป็นหมากแรกกันฝ่ายเดินก่อนได้เปรียบสถิติ
+  // กระดานคู่ (4×4) ไม่มีช่องกลางเดี่ยว แต่ต้องกันด้วยกติกาห้ามฟอร์กแทน (คนละปัญหากัน)
+  NO_CENTER_FIRST = (BOARD_N % 2 === 1);
+
+  const idx = (r,c) => r*BOARD_N + c;
+  LINES = [];
+  for(let r=0;r<BOARD_N;r++) for(let c=0;c<=BOARD_N-3;c++) LINES.push([idx(r,c),idx(r,c+1),idx(r,c+2)]);
+  for(let c=0;c<BOARD_N;c++) for(let r=0;r<=BOARD_N-3;r++) LINES.push([idx(r,c),idx(r+1,c),idx(r+2,c)]);
+  for(let r=0;r<=BOARD_N-3;r++) for(let c=0;c<=BOARD_N-3;c++) LINES.push([idx(r,c),idx(r+1,c+1),idx(r+2,c+2)]);
+  for(let r=0;r<=BOARD_N-3;r++) for(let c=2;c<BOARD_N;c++) LINES.push([idx(r,c),idx(r+1,c-1),idx(r+2,c-2)]);
+
+  // น้ำหนักตำแหน่งสำหรับ AI: นับว่าแต่ละช่องเป็นส่วนหนึ่งของกี่เส้นชนะ (ช่องกลางเยอะสุด)
+  CELL_LINE_COUNT = new Array(CELLS).fill(0);
+  for(const L of LINES) for(const i of L) CELL_LINE_COUNT[i]++;
+
+  // ช่องที่ "ติดกัน" = เดินได้แบบราชาหมากรุก (รวมทแยง)
+  ADJ = [];
   for(let i=0;i<CELLS;i++){
-    const r = Math.floor(i/BOARD_N), c = i%BOARD_N, n = [];
+    const r = Math.floor(i/BOARD_N), c = i%BOARD_N, nb = [];
     for(let dr=-1;dr<=1;dr++) for(let dc=-1;dc<=1;dc++){
       if(!dr && !dc) continue;
       const rr = r+dr, cc = c+dc;
-      if(rr>=0 && rr<BOARD_N && cc>=0 && cc<BOARD_N) n.push(rr*BOARD_N+cc);
+      if(rr>=0 && rr<BOARD_N && cc>=0 && cc<BOARD_N) nb.push(rr*BOARD_N+cc);
     }
-    a.push(n);
+    ADJ.push(nb);
   }
-  return a;
-})();
+
+  G.board = new Array(CELLS).fill(0);
+  PIECES = []; G.sel = null; WINFLAG[0] = 0;
+
+  // ระยะกล้อง/ช่วงซูมสเกลตามขนาดกระดาน (ค่าอ้างอิงเดิมตั้งไว้สำหรับ 4×4)
+  const k = (BOARD_HALF + 0.22) / 2.22;
+  ZOOM_MIN = 4.5*k; ZOOM_MAX = 14*k;
+  CAM.yaw = CAM.tYaw = 0; CAM.pitch = CAM.tPitch = 0.55; CAM.dist = CAM.tDist = 8.4*k;
+}
 
 const OPTS = { adjOnly:false, level:2 };
 let MODE = 'ai';            // 'ai' | 'local' | 'net'
@@ -849,6 +892,8 @@ function legalMoves(board, turn, placed, opts){
   if(placed[turn] < PIECES_PER_SIDE){
     for(let i=0;i<CELLS;i++){
       if(board[i]) continue;
+      // กระดานคี่ (3×3): ห้ามลงกลางเป็นหมากแรกของทั้งกระดาน กันฝ่ายเดินก่อนได้เปรียบสถิติ
+      if(NO_CENTER_FIRST && i === (CELLS-1)/2 && placed[1]+placed[2]===0) continue;
       out.push({k:0, c:i});
     }
   } else {
@@ -874,7 +919,13 @@ function legalMoves(board, turn, placed, opts){
 // เท่ากับกติกาบังคับใช้กับผู้เล่นฝ่ายเดียว คอมทำสิ่งที่ผู้เล่นทำไม่ได้ — ไม่แฟร์จริงตามที่มีคนทัก
 // จึงเปลี่ยนเป็นห้าม "ทั้งสองฝั่งเท่ากัน" แทน (ทดสอบแล้วว่าเกมยังจบเร็วกว่ากระดาน 3×3 เดิมมาก
 // ไม่ได้กลับไปเสมอง่ายเหมือนก่อน แค่ต้องวางกลยุทธ์สร้างฟอร์กหลายขั้นตอนแทนที่จะจบในสองเม็ด)
+//
+// ⚠️ กระดาน 3×3 ไม่ต้องใช้กติกานี้เลย — ทุกแนวยาวพอดี 3 ช่อง ไม่มี "แนวยาว 4 ช่อง" ให้เกิด
+// คู่กลางที่เปิดหัวท้ายได้ ฟอร์กใน 3×3 (เช่นกลยุทธ์มุมตรงข้ามคลาสสิก) ยังมีอยู่จริง แต่เป็นแบบ
+// "ป้องกันได้เสมอด้วยการเล่นถูก" (พิสูจน์มานานแล้วว่า 3×3 เสมอด้วยไม้ที่ดีทั้งคู่) ถ้าห้ามด้วย
+// จะตัดโอกาสเล่นกลยุทธ์คลาสสิกที่คนคุ้นเคยออกไปเฉย ๆ โดยไม่จำเป็น
 function restrictForks(board, placed, turn, moves){
+  if(BOARD_N < 4) return moves;
   const safe = moves.filter(mv => {
     apply(board, placed, turn, mv);
     const wonNow = !!checkWin(board, turn);
@@ -976,6 +1027,7 @@ function tapCell(i){
 
   if(G.placed[turn] < PIECES_PER_SIDE){          // ── ช่วงวางหมาก ──
     if(G.board[i]) { sfx('nope'); return; }
+    if(NO_CENTER_FIRST && i === (CELLS-1)/2 && totalPlaced()===0){ toast('ตาแรกลงกลางไม่ได้ครับ'); sfx('nope'); return; }
     const mv = {k:0, c:i};
     if(!isMoveAllowed(mv)){ toast('ตานี้เปิดช่องชนะพร้อมกันสองทาง วางไม่ได้ครับ'); sfx('nope'); return; }
     commit(mv);
@@ -1240,7 +1292,7 @@ CV.addEventListener('pointerup', e => {
 CV.addEventListener('pointercancel', () => { drag = null; CV.classList.remove('dragging'); });
 CV.addEventListener('wheel', e => {
   e.preventDefault();
-  CAM.tDist = Math.max(4.5, Math.min(14, CAM.tDist + Math.sign(e.deltaY)*0.5));
+  CAM.tDist = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, CAM.tDist + Math.sign(e.deltaY)*0.5));
 }, {passive:false});
 
 /* =============================================================================
@@ -1361,7 +1413,7 @@ async function hostRoom(){
     peer.on('connection', conn => {
       NET.conn = conn;
       wireConn(conn, () => {
-        conn.send({t:'init', opts:OPTS});   // เจ้าของห้องเป็นคนกำหนดกติกา
+        conn.send({t:'init', opts:OPTS, boardN:BOARD_N});   // เจ้าของห้องเป็นคนกำหนดกติกา+ขนาดกระดาน
         startNetGame(BLACK);
       });
     });
@@ -1409,8 +1461,11 @@ function wireConn(conn, onOpen){
   conn.on('open', () => { onOpen && onOpen(); });
   conn.on('data', msg => {
     if(!msg || !msg.t) return;
-    if(msg.t === 'init'){                        // ผู้เข้าร่วมรับกติกาจากเจ้าของห้อง
+    if(msg.t === 'init'){                        // ผู้เข้าร่วมรับกติกา+ขนาดกระดานจากเจ้าของห้อง
       Object.assign(OPTS, msg.opts);
+      applyBoardSize(msg.boardN || 4);            // ต้องซิงก์ก่อน ไม่งั้น LINES/ADJ สองฝั่งไม่ตรงกัน
+      SELECTED_BOARD_N = BOARD_N;
+      [...$('segBoard').children].forEach(x => x.classList.toggle('on', +x.dataset.n === BOARD_N));
       syncOptUI();
       startNetGame(WHITE);
     } else if(msg.t === 'act'){
@@ -1546,6 +1601,16 @@ $('segLv').onclick = e => {
   [...$('segLv').children].forEach(x => x.classList.remove('on'));
   b.classList.add('on'); OPTS.level = +b.dataset.lv;
 };
+
+let SELECTED_BOARD_N = 4;   // ตัวเลือกในเมนูก่อนเริ่มเกม (ค่าเริ่มต้นตรงกับ 4×4 ที่ผู้เล่นคุ้นเคยอยู่แล้ว)
+$('segBoard').onclick = e => {
+  const b = e.target.closest('button'); if(!b) return;
+  [...$('segBoard').children].forEach(x => x.classList.remove('on'));
+  b.classList.add('on');
+  SELECTED_BOARD_N = +b.dataset.n;
+  applyBoardSize(SELECTED_BOARD_N);   // อัปเดตกระดานพรีวิวหลังเมนูให้เห็นขนาดใหม่ทันที
+  $('menuSub').textContent = `3D · กระดาน ${SELECTED_BOARD_N}×${SELECTED_BOARD_N} · ฝั่งละ ${SELECTED_BOARD_N} เม็ด · เรียงสามชนะ`;
+};
 $('swAdj').onclick = function(){ OPTS.adjOnly = !OPTS.adjOnly; this.classList.toggle('on', OPTS.adjOnly); };
 
 $('nCreate').onclick  = hostRoom;
@@ -1599,7 +1664,9 @@ $('bUndo').onclick = () => {
 };
 $('bView').onclick = () => {
   // หน้าตรงก้มเล็กน้อย (ค่าเริ่มต้น) → มองจากด้านบน → เฉียงขวา → เฉียงซ้ายมุมต่ำ
-  const views = [[0,0.55,8.4],[0,1.35,7.9],[0.62,0.80,8.3],[-0.7,0.42,8.8]];
+  // ค่าระยะอ้างอิงตั้งไว้สำหรับ 4×4 แล้วสเกลตามขนาดกระดานที่กำลังเล่นอยู่จริง
+  const k = (BOARD_HALF + 0.22) / 2.22;
+  const views = [[0,0.55,8.4*k],[0,1.35,7.9*k],[0.62,0.80,8.3*k],[-0.7,0.42,8.8*k]];
   $('bView')._i = (($('bView')._i || 0) + 1) % views.length;
   const v = views[$('bView')._i];
   CAM.tYaw = v[0]; CAM.tPitch = v[1]; CAM.tDist = v[2];
@@ -1630,6 +1697,7 @@ if(!initGL()){
     'เบราว์เซอร์นี้เปิด WebGL ไม่ได้ครับ<br><span style="color:#9E8E84;font-weight:400;font-size:13px">' +
     'ลองเปิดด้วย Chrome / Edge รุ่นใหม่ หรือเปิดการเร่งความเร็วด้วยฮาร์ดแวร์ในตั้งค่าเบราว์เซอร์</span></div>';
 } else {
+  applyBoardSize(SELECTED_BOARD_N);
   syncOptUI();
   refreshUI();
   requestAnimationFrame(frame);
